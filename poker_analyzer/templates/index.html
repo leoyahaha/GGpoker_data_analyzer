@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css?v=3bet-matrix-3" />
   <link rel="stylesheet" href="/static/css/replay.css" />
   <script src="/static/js/chart.umd.min.js"></script>
 </head>
@@ -176,6 +176,52 @@
           <div class="panel-head-aside">
             <button type="button" class="btn ghost" id="pfReplayBtn">数据可视化</button>
             <div class="stat-row" id="preflopStats"></div>
+          </div>
+        </div>
+
+        <div class="pf-dashboard" id="preflopDashboard">
+          <h3 class="hand-dist-title">翻前 3bet 数据看板</h3>
+          <p class="hand-dist-hint">
+            行 = 被 3bet 方，列 = 3bet 方。格内自上而下为被 3bet 方的
+            <span class="pf-leg-f">弃牌 F</span> /
+            <span class="pf-leg-c">跟注 C</span> /
+            <span class="pf-leg-4b">4bet</span>。
+            点击格子查看手牌分布。
+          </p>
+          <p class="hand-dist-hint pf-matrix-warn" id="preflop3betWarn" hidden></p>
+          <div class="pf-matrix-wrap">
+            <table class="pf-matrix-table" id="preflop3betMatrix"></table>
+          </div>
+          <div class="pf-matrix-detail" id="preflop3betDetail" hidden>
+            <h4 class="pf-matrix-detail-title" id="preflop3betDetailTitle"></h4>
+            <div class="pf-matrix-detail-cols">
+              <div class="hand-dist-table-wrap">
+                <h5 class="pf-matrix-sub">跟注手牌</h5>
+                <table class="hand-dist-table" id="preflop3betCallTable">
+                  <thead>
+                    <tr>
+                      <th>手牌</th>
+                      <th>次数</th>
+                      <th>占比</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="hand-dist-table-wrap">
+                <h5 class="pf-matrix-sub">4bet 手牌</h5>
+                <table class="hand-dist-table" id="preflop3betFourbetTable">
+                  <thead>
+                    <tr>
+                      <th>手牌</th>
+                      <th>次数</th>
+                      <th>占比</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -392,6 +438,6 @@
 
   <script src="/static/js/replay.js"></script>
   <script src="/static/js/tools.js"></script>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=3bet-matrix-3"></script>
 </body>
 </html>

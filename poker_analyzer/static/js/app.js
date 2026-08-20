@@ -66,6 +66,8 @@
     filterDefaults: null,
     wirRequestId: 0,
     pfRequestId: 0,
+    pfMatrixRequestId: 0,
+    pfMatrixCells: null,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -252,7 +254,18 @@
       if (target && (target.name === "pf-hero-pos" || target.name === "pf-action")) {
         syncPreflopOpenerRow();
       }
-      schedulePreflopRefresh();
+      const panel = $("#panel-preflop_analysis");
+      if (!state.open.has("preflop_analysis") || (panel && panel.hidden)) return;
+      analyzePreflop().catch((err) => {
+        $("#filterStatus").textContent = `分析失败: ${err.message}`;
+        console.error(err);
+      });
+      if (target && (target.id === "pfAllowLimp" || target.id === "pfAllowCall")) {
+        analyzePreflopMatrix().catch((err) => {
+          $("#filterStatus").textContent = `分析失败: ${err.message}`;
+          console.error(err);
+        });
+      }
     });
   }
 
@@ -323,15 +336,6 @@
     if (action === "4bet" && villain) options.threebettor_position = villain.value;
     if (action === "5bet" && villain) options.fourbettor_position = villain.value;
     return options;
-  }
-
-  function schedulePreflopRefresh() {
-    const panel = $("#panel-preflop_analysis");
-    if (!state.open.has("preflop_analysis") || (panel && panel.hidden)) return;
-    analyzePreflop().catch((err) => {
-      $("#filterStatus").textContent = `分析失败: ${err.message}`;
-      console.error(err);
-    });
   }
 
   function scheduleWhenIRaiseRefresh() {
@@ -832,7 +836,7 @@
         } else if (def.id === "when_i_raise") {
           await analyzeWhenIRaise();
         } else if (def.id === "preflop_analysis") {
-          await analyzePreflop();
+          await Promise.all([analyzePreflop(), analyzePreflopMatrix()]);
         }
       }
 
@@ -875,6 +879,146 @@
     });
     if (requestId !== state.pfRequestId) return;
     renderPreflop(data);
+  }
+
+  function readPreflopMatrixOptions() {
+    const allowLimp = $("#pfAllowLimp");
+    const allowCall = $("#pfAllowCall");
+    return {
+      action: "3bet_matrix",
+      allow_limp: allowLimp ? allowLimp.checked : true,
+      allow_call: allowCall ? allowCall.checked : true,
+    };
+  }
+
+  async function analyzePreflopMatrix() {
+    const requestId = ++state.pfMatrixRequestId;
+    const table = $("#preflop3betMatrix");
+    if (table) {
+      table.innerHTML = `<tbody><tr><td class="pf-matrix-na">计算中…</td></tr></tbody>`;
+    }
+    const detail = $("#preflop3betDetail");
+    if (detail) detail.hidden = true;
+    const data = await fetchJSON("/api/metrics/preflop_analysis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...readFilter(), options: readPreflopMatrixOptions() }),
+    });
+    if (requestId !== state.pfMatrixRequestId) return;
+    renderPreflopMatrix(data);
+  }
+
+  function fmtMatrixPct(n) {
+    if (n === null || n === undefined) return "—";
+    return Number(n).toFixed(0);
+  }
+
+  function renderPreflopMatrixHandTable(tableSel, rows) {
+    const tbody = document.querySelector(`${tableSel} tbody`);
+    if (!tbody) return;
+    if (!rows || !rows.length) {
+      tbody.innerHTML = `<tr><td colspan="3" class="unknown">无</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows
+      .map((row) => {
+        const cls = row.hand === "未知" ? "unknown" : "";
+        return `<tr class="${cls}"><td>${row.hand}</td><td>${row.count}</td><td>${fmtPct(row.pct)}</td></tr>`;
+      })
+      .join("");
+  }
+
+  function showPreflopMatrixDetail(cell) {
+    const detail = $("#preflop3betDetail");
+    const title = $("#preflop3betDetailTitle");
+    if (!detail || !title || !cell || !cell.valid) return;
+    title.textContent = `${cell.opener} open 被 ${cell.threebettor} 3bet · 面对样本 ${cell.faced || 0} · 跟注 ${cell.call_hand_count || 0} · 4bet ${cell.fourbet_hand_count || 0}`;
+    renderPreflopMatrixHandTable("#preflop3betCallTable", cell.call_hands);
+    renderPreflopMatrixHandTable("#preflop3betFourbetTable", cell.fourbet_hands);
+    detail.hidden = false;
+    document.querySelectorAll("#preflop3betMatrix td.pf-matrix-cell").forEach((td) => {
+      const on =
+        td.dataset.three === cell.threebettor && td.dataset.opener === cell.opener;
+      td.classList.toggle("is-active", on);
+    });
+  }
+
+  function renderPreflopMatrix(data) {
+    const table = $("#preflop3betMatrix");
+    const warn = $("#preflop3betWarn");
+    if (!table) return;
+    const positions = data.positions || pfPositionOrder;
+    const cellMap = new Map();
+    for (const cell of data.cells || []) {
+      cellMap.set(`${cell.threebettor}|${cell.opener}`, cell);
+    }
+    state.pfMatrixCells = cellMap;
+
+    let facedSum = 0;
+    let foldW = 0;
+    for (const cell of cellMap.values()) {
+      if (!cell.valid || !cell.faced) continue;
+      facedSum += cell.faced;
+      foldW += (cell.fold && cell.fold.count) || 0;
+    }
+    if (warn) {
+      const foldPct = facedSum ? (100 * foldW) / facedSum : null;
+      if (foldPct != null && foldPct < 25) {
+        warn.hidden = false;
+        warn.textContent =
+          `当前样本整体弃牌仅 ${foldPct.toFixed(0)}%，很可能是「仅摊牌」牌谱（如 opp_hand）：开牌人弃牌后通常无亮牌，弃牌样本会缺失，导致 F 偏低、C/4b 虚高。请改用 all_hand 全量牌谱看 fold to 3bet。`;
+      } else {
+        warn.hidden = true;
+        warn.textContent = "";
+      }
+    }
+
+    // 行 = 被 3bet 方(opener)，列 = 3bet 方(threebettor)；格内 F / C / 4b
+    const head = positions.map((p) => `<th>${p}</th>`).join("");
+    const body = positions
+      .map((opener) => {
+        const cells = positions
+          .map((three) => {
+            const cell = cellMap.get(`${three}|${opener}`);
+            if (!cell || !cell.valid) {
+              return `<td class="pf-matrix-na">—</td>`;
+            }
+            const fold = cell.fold || {};
+            const call = cell.call || {};
+            const four = cell.fourbet || {};
+            const faced = cell.faced || 0;
+            const rates = faced
+              ? `<span class="pf-r pf-r-f"><em>F</em>${fmtMatrixPct(fold.pct)}</span>
+                 <span class="pf-r pf-r-c"><em>C</em>${fmtMatrixPct(call.pct)}</span>
+                 <span class="pf-r pf-r-4b"><em>4b</em>${fmtMatrixPct(four.pct)}</span>`
+              : `<span class="pf-matrix-na">—</span>`;
+            return `<td class="pf-matrix-cell" data-three="${three}" data-opener="${opener}" title="弃牌 / 跟注 / 4bet">
+              <div class="pf-matrix-stack">${rates}</div>
+              <span class="pf-matrix-n">n=${faced}</span>
+            </td>`;
+          })
+          .join("");
+        return `<tr><th class="pf-matrix-rowhead">${opener}</th>${cells}</tr>`;
+      })
+      .join("");
+
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th class="pf-matrix-corner">被3bet \\ 3bet</th>
+          ${head}
+        </tr>
+      </thead>
+      <tbody>${body}</tbody>
+    `;
+
+    table.querySelectorAll("td.pf-matrix-cell").forEach((td) => {
+      td.addEventListener("click", () => {
+        const key = `${td.dataset.three}|${td.dataset.opener}`;
+        const cell = state.pfMatrixCells && state.pfMatrixCells.get(key);
+        if (cell) showPreflopMatrixDetail(cell);
+      });
+    });
   }
 
   function renderPreflopHands(data) {
