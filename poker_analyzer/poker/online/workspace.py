@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import pickle
 import threading
@@ -15,6 +16,21 @@ from poker.models import HandDataset
 from poker.online.limits import BusyError, ResourceGate
 from poker.online.settings import OnlineSettings
 from poker.sources import LocalDirectorySource
+
+# Upload guards (cost / abuse).
+_MAX_TXT_BYTES = 20 * 1024 * 1024
+_MAX_ZIP_BYTES = 50 * 1024 * 1024
+_MAX_ZIP_MEMBERS = 500
+_MAX_ZIP_UNCOMPRESSED = 100 * 1024 * 1024
+_ALLOWED_SUFFIXES = (".txt", ".zip")
+_HAND_HINTS = (
+    b"poker hand",
+    b"ggpoker",
+    b"dealt to",
+    b"*** hole cards ***",
+    b"*** flop ***",
+    b"seat ",
+)
 
 
 @dataclass
@@ -178,45 +194,81 @@ class WorkspaceStore:
         return result
 
     def save_upload(self, user_id: str, filename: str, data: bytes) -> dict[str, Any]:
-        name = Path(filename).name
-        if not name:
-            raise ValueError("文件名无效")
-        lower = name.lower()
+        name = self.validate_upload(filename, data)
         uploads = self.uploads_dir(user_id)
-        if lower.endswith(".zip"):
+        if name.lower().endswith(".zip"):
             return self._save_zip(user_id, uploads, name, data)
-        if not lower.endswith(".txt"):
-            raise ValueError("仅支持 .txt 或 .zip")
         target = uploads / name
         target.write_bytes(data)
         return {"saved": [name], "txt_count": 1}
 
-    def _save_zip(self, user_id: str, uploads: Path, name: str, data: bytes) -> dict[str, Any]:
-        zip_path = self.user_dir(user_id) / "incoming" / name
-        zip_path.parent.mkdir(parents=True, exist_ok=True)
-        zip_path.write_bytes(data)
-        saved: list[str] = []
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                for info in zf.infolist():
-                    if info.is_dir():
-                        continue
-                    base = Path(info.filename).name
-                    if not base.lower().endswith(".txt"):
-                        continue
-                    # Prevent zip-slip
-                    out = (uploads / base).resolve()
-                    if not str(out).startswith(str(uploads.resolve())):
-                        continue
-                    out.write_bytes(zf.read(info))
-                    saved.append(base)
-        finally:
+    @staticmethod
+    def validate_upload(filename: str, data: bytes) -> str:
+        """Reject unsupported / abusive uploads before any disk write."""
+        name = Path(filename or "").name.strip()
+        if not name or name in {".", ".."}:
+            raise ValueError("文件名无效")
+        lower = name.lower()
+        if not lower.endswith(_ALLOWED_SUFFIXES):
+            raise ValueError(f"不支持的格式: {name}（仅允许 .txt / .zip）")
+        if not data:
+            raise ValueError(f"{name}: 文件为空")
+        if lower.endswith(".zip"):
+            if len(data) > _MAX_ZIP_BYTES:
+                raise ValueError(f"{name}: zip 不能超过 {_MAX_ZIP_BYTES // (1024 * 1024)}MB")
+            if not data.startswith(b"PK"):
+                raise ValueError(f"{name}: 不是有效的 zip 文件")
             try:
-                zip_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+                with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+                    infos = [i for i in zf.infolist() if not i.is_dir()]
+                    if len(infos) > _MAX_ZIP_MEMBERS:
+                        raise ValueError(f"{name}: zip 内文件过多（最多 {_MAX_ZIP_MEMBERS} 个）")
+                    total = 0
+                    has_txt = False
+                    for info in infos:
+                        total += max(0, int(info.file_size))
+                        if total > _MAX_ZIP_UNCOMPRESSED:
+                            raise ValueError(f"{name}: 解压后体积过大")
+                        if Path(info.filename).name.lower().endswith(".txt"):
+                            has_txt = True
+                    if not has_txt:
+                        raise ValueError(f"{name}: 压缩包内没有 .txt 牌谱")
+            except zipfile.BadZipFile as exc:
+                raise ValueError(f"{name}: zip 损坏或格式无效") from exc
+            return name
+        # .txt
+        if len(data) > _MAX_TXT_BYTES:
+            raise ValueError(f"{name}: txt 不能超过 {_MAX_TXT_BYTES // (1024 * 1024)}MB")
+        sample = data[:8192]
+        if b"\x00" in sample:
+            raise ValueError(f"{name}: 不是文本牌谱（检测到二进制内容）")
+        head = sample.lower()
+        if not any(h in head for h in _HAND_HINTS):
+            # Allow UTF-16-ish BOM / weird encodings to still fail closed for junk
+            raise ValueError(f"{name}: 不像 GG Poker 牌谱文本，已拒绝")
+        return name
+
+    def _save_zip(self, user_id: str, uploads: Path, name: str, data: bytes) -> dict[str, Any]:
+        saved: list[str] = []
+        with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                base = Path(info.filename).name
+                if not base.lower().endswith(".txt"):
+                    continue
+                raw = zf.read(info)
+                try:
+                    self.validate_upload(base, raw)
+                except ValueError:
+                    continue
+                out = (uploads / base).resolve()
+                if not str(out).startswith(str(uploads.resolve())):
+                    continue
+                out.write_bytes(raw)
+                saved.append(base)
         if not saved:
-            raise ValueError("压缩包内没有 .txt 牌谱")
+            raise ValueError("压缩包内没有可用的 .txt 牌谱")
         return {"saved": saved, "txt_count": len(saved)}
 
     def start_import(self, user_id: str) -> dict[str, Any]:

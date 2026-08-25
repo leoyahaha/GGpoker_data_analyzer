@@ -4,6 +4,7 @@ import json
 import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
@@ -69,8 +70,8 @@ def _parse_multipart(handler: BaseHTTPRequestHandler) -> list[tuple[str, bytes]]
     length = int(handler.headers.get("Content-Length") or 0)
     if length <= 0:
         raise ValueError("空上传")
-    if length > 200 * 1024 * 1024:
-        raise ValueError("单次上传不能超过 200MB")
+    if length > 50 * 1024 * 1024:
+        raise ValueError("单次上传不能超过 50MB")
     raw = handler.rfile.read(length)
     sep = b"--" + boundary
     parts = raw.split(sep)
@@ -92,6 +93,10 @@ def _parse_multipart(handler: BaseHTTPRequestHandler) -> list[tuple[str, bytes]]
         if not name_m:
             continue
         filename = name_m.group(1)
+        # Early extension reject (still after body read — browser/nginx should also limit).
+        lower = Path(filename).name.lower()
+        if not lower.endswith((".txt", ".zip")):
+            raise ValueError(f"不支持的格式: {Path(filename).name}（仅允许 .txt / .zip）")
         files.append((filename, body))
     if not files:
         raise ValueError("未找到上传文件")
@@ -187,6 +192,9 @@ class OnlineApp:
             if path == "/api/upload" and method == "POST":
                 try:
                     files = _parse_multipart(handler)
+                    # Validate all first — reject whole batch if any file is bad (no partial writes).
+                    for name, data in files:
+                        self.store.validate_upload(name, data)
                     saved_all: list[str] = []
                     for name, data in files:
                         result = self.store.save_upload(user, name, data)

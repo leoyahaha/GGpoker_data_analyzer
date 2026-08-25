@@ -234,13 +234,32 @@
       $("#uploadStatus").textContent = "请先选择 .txt 或 .zip 文件。";
       return;
     }
+    const allowed = [];
+    const rejected = [];
+    for (const f of files) {
+      if (/\.(txt|zip)$/i.test(f.name)) allowed.push(f);
+      else rejected.push(f.name);
+    }
+    if (rejected.length) {
+      const msg = `已拒绝不支持的格式: ${rejected.slice(0, 5).join("、")}${rejected.length > 5 ? "…" : ""}（仅 .txt / .zip）`;
+      $("#uploadStatus").textContent = msg;
+      showToast("上传已禁止", msg, { type: "warn" });
+      return;
+    }
+    const tooBig = allowed.filter((f) => f.size > 50 * 1024 * 1024);
+    if (tooBig.length) {
+      const msg = `文件过大（单文件/单次不超过 50MB）: ${tooBig[0].name}`;
+      $("#uploadStatus").textContent = msg;
+      showToast("上传已禁止", msg, { type: "warn" });
+      return;
+    }
     const btn = $("#uploadBtn");
     btn.disabled = true;
     btn.textContent = "上传中…";
     $("#uploadStatus").textContent = "正在上传…";
     try {
       const form = new FormData();
-      for (const f of files) form.append("files", f, f.name);
+      for (const f of allowed) form.append("files", f, f.name);
       const res = await fetch("/api/upload", {
         method: "POST",
         body: form,
@@ -270,6 +289,7 @@
     } catch (err) {
       $("#uploadStatus").textContent = `上传失败: ${err.message}`;
       btn.textContent = "点击上传";
+      showToast("上传已禁止", err.message, { type: "warn" });
       console.error(err);
     } finally {
       btn.disabled = false;
