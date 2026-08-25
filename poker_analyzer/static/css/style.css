@@ -1534,3 +1534,49 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+/* Online login gate */
+.login-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 16, 0.82);
+  backdrop-filter: blur(6px);
+  padding: 20px;
+}
+.login-gate[hidden] {
+  display: none !important;
+}
+.login-card {
+  width: min(420px, 100%);
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.login-card h2 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+}
+.login-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.login-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+#onlineDataBar input[type="file"] {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}

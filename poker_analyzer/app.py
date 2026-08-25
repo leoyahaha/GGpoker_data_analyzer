@@ -1,7 +1,7 @@
 """
 Poker Analyzer — local offline HTTP app (Python stdlib only).
 
-Bind to 127.0.0.1; no third-party packages required.
+Offline: bind 127.0.0.1. Online: set POKER_MODE=online (+ POKER_ACCESS_PASSWORD).
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from urllib.parse import unquote, urlparse
 
 from poker.config import browse_job_status, format_data_dir, load_data_dir, resolve_data_dir, start_browse_job
 from poker.filters import FilterSpec
+from poker.online.settings import is_online_mode, load_settings
 from poker.service import get_service
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,6 +30,17 @@ TEMPLATE_PATH = BASE_DIR / "templates" / "index.html"
 
 HOST = "127.0.0.1"
 PORT = 8000
+
+_ONLINE_APP = None
+
+
+def _get_online_app():
+    global _ONLINE_APP
+    if _ONLINE_APP is None:
+        from poker.online.http_api import OnlineApp
+
+        _ONLINE_APP = OnlineApp(load_settings())
+    return _ONLINE_APP
 
 
 def _json_bytes(payload: Any, status: int = 200) -> tuple[int, bytes, str]:
@@ -254,23 +266,41 @@ def _serve_static(rel: str) -> tuple[int, bytes, str] | None:
     return HTTPStatus.OK, data, mime or "application/octet-stream"
 
 
-def _serve_index() -> tuple[int, bytes, str]:
+def _serve_index(*, online: bool = False) -> tuple[int, bytes, str]:
     html = TEMPLATE_PATH.read_text(encoding="utf-8")
-    html = html.replace("{{ title }}", "Poker Analyzer")
+    title = "Poker Analyzer Online" if online else "Poker Analyzer"
+    html = html.replace("{{ title }}", title)
+    if online:
+        html = html.replace("Local Offline", "Online Cloud")
+        html = html.replace('data-mode="local"', 'data-mode="online"')
+        if 'data-mode="' not in html:
+            html = html.replace("<body>", '<body data-mode="online">', 1)
+    else:
+        if 'data-mode="' not in html:
+            html = html.replace("<body>", '<body data-mode="local">', 1)
     return HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8"
 
 
 class LocalHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    online = False
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        extra_headers: list[tuple[str, str]] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in extra_headers or []:
+            self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -281,12 +311,16 @@ class LocalHandler(BaseHTTPRequestHandler):
 
         try:
             if path.startswith("/api/"):
-                status, body, ctype = _handle_api(method, path, self)
-                self._send(status, body, ctype)
+                if self.online:
+                    status, body, ctype, headers = _get_online_app().handle(method, path, self)
+                    self._send(status, body, ctype, headers)
+                else:
+                    status, body, ctype = _handle_api(method, path, self)
+                    self._send(status, body, ctype)
                 return
 
             if path in ("/", "/index.html"):
-                status, body, ctype = _serve_index()
+                status, body, ctype = _serve_index(online=self.online)
                 self._send(status, body, ctype)
                 return
 
@@ -323,21 +357,42 @@ def main() -> int:
         print("[ERROR] Missing local chart.js: static/js/chart.umd.min.js", file=sys.stderr)
         return 1
 
-    # Threaded server: a slow API (or stuck dialog) must not freeze the whole page.
+    online = is_online_mode()
+    host, port = HOST, PORT
+    if online:
+        settings = load_settings()
+        host, port = settings.host, settings.port
+        if not settings.access_password:
+            print(
+                "[ERROR] Online mode requires POKER_ACCESS_PASSWORD",
+                file=sys.stderr,
+            )
+            return 1
+        _get_online_app()  # init early
+        LocalHandler.online = True
+
     try:
-        server = ThreadingHTTPServer((HOST, PORT), LocalHandler)
+        server = ThreadingHTTPServer((host, port), LocalHandler)
     except OSError as exc:
-        print(f"[ERROR] Cannot bind {HOST}:{PORT} — {exc}", file=sys.stderr)
-        print("Close the old Poker Analyzer window (or free port 8000) and retry.", file=sys.stderr)
+        print(f"[ERROR] Cannot bind {host}:{port} — {exc}", file=sys.stderr)
+        print("Close the old Poker Analyzer window (or free the port) and retry.", file=sys.stderr)
         return 1
 
-    url = f"http://{HOST}:{PORT}"
-    print(f"Poker Analyzer (offline)")
-    print(f"URL: {url}")
-    print(f"Data: {get_service().data_dir}")
-    print("Keep this window open. Press Ctrl+C to stop.")
-
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    url = f"http://{host}:{port}"
+    if online:
+        settings = load_settings()
+        print("Poker Analyzer (online)")
+        print(f"URL: {url}")
+        print(f"Data root: {settings.data_root}")
+        print(f"Max hands / user: {settings.max_hands}")
+        print(f"Idle TTL: {settings.idle_ttl_sec}s · cached users: {settings.max_cached_users}")
+        print("Press Ctrl+C to stop.")
+    else:
+        print("Poker Analyzer (offline)")
+        print(f"URL: {url}")
+        print(f"Data: {get_service().data_dir}")
+        print("Keep this window open. Press Ctrl+C to stop.")
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
 
     try:
         server.serve_forever()

@@ -1,2 +1,10 @@
 # No third-party packages required.
 # Poker Analyzer runs on Python 3.10+ standard library only.
+#
+# Online / cloud mode:
+#   export POKER_MODE=online
+#   export POKER_ACCESS_PASSWORD='your-secret'
+#   export POKER_HOST=0.0.0.0
+#   export POKER_PORT=8000
+#   python app.py
+# Or: ./run_online.sh
