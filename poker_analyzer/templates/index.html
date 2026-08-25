@@ -4,23 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=online-1" />
+  <link rel="stylesheet" href="/static/css/style.css?v=online-4" />
   <link rel="stylesheet" href="/static/css/replay.css" />
   <script src="/static/js/chart.umd.min.js"></script>
 </head>
 <body data-mode="local">
-  <div id="loginGate" class="login-gate" hidden>
-    <div class="login-card">
-      <h2>Poker Analyzer Online</h2>
-      <p class="login-hint">请输入访问密码。工作区名称相同可复用同一份已上传数据。</p>
-      <label class="login-label" for="loginPassword">访问密码</label>
-      <input type="password" id="loginPassword" class="path-input" autocomplete="current-password" />
-      <label class="login-label" for="loginWorkspace">工作区名称（可选）</label>
-      <input type="text" id="loginWorkspace" class="path-input" placeholder="例如 my-name" autocomplete="username" />
-      <button type="button" class="btn" id="loginBtn">进入</button>
-      <p class="filter-status" id="loginStatus"></p>
-    </div>
-  </div>
   <div class="page">
     <header class="header">
       <div>
@@ -30,7 +18,6 @@
       </div>
       <div class="header-actions">
         <button type="button" class="btn ghost" id="reloadBtn">重新扫描</button>
-        <button type="button" class="btn ghost" id="logoutBtn" hidden>退出登录</button>
       </div>
     </header>
 
@@ -58,9 +45,7 @@
       </div>
       <div class="data-path-row">
         <input type="file" id="uploadInput" accept=".txt,.zip,text/plain,application/zip" multiple />
-        <button type="button" class="btn" id="uploadBtn">上传</button>
-        <button type="button" class="btn ghost" id="importBtn">开始导入</button>
-        <button type="button" class="btn ghost" id="clearUploadBtn">清空牌谱</button>
+        <button type="button" class="btn" id="uploadBtn">点击上传</button>
       </div>
       <p class="filter-status" id="uploadStatus">尚未上传文件。</p>
     </section>
@@ -537,6 +522,6 @@
 
   <script src="/static/js/replay.js"></script>
   <script src="/static/js/tools.js"></script>
-  <script src="/static/js/app.js?v=online-1"></script>
+  <script src="/static/js/app.js?v=online-4"></script>
 </body>
 </html>

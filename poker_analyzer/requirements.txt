@@ -3,8 +3,8 @@
 #
 # Online / cloud mode:
 #   export POKER_MODE=online
-#   export POKER_ACCESS_PASSWORD='your-secret'
 #   export POKER_HOST=0.0.0.0
 #   export POKER_PORT=8000
+#   # optional: export POKER_DATA_ROOT=$HOME/poker_data
 #   python app.py
 # Or: ./run_online.sh

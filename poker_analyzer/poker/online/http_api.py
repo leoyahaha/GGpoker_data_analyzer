@@ -105,134 +105,195 @@ class OnlineApp:
         self.gate = ResourceGate(settings)
         self.store = WorkspaceStore(settings, self.gate)
 
-    def require_user(self, handler: BaseHTTPRequestHandler) -> str | tuple[int, bytes, str, list[tuple[str, str]]]:
-        if not self.auth.password_configured:
-            return _error(
-                "服务器未配置 POKER_ACCESS_PASSWORD，拒绝启动在线服务",
-                HTTPStatus.SERVICE_UNAVAILABLE,
-            )
-        session = self.auth.resolve(handler.headers.get("Cookie"))
-        if session is None:
-            return _error("未登录", HTTPStatus.UNAUTHORIZED)
-        return session.user_id
+    def require_user(self, handler: BaseHTTPRequestHandler) -> tuple[str, list[tuple[str, str]]]:
+        session, set_cookie = self.auth.ensure(handler.headers.get("Cookie"))
+        headers: list[tuple[str, str]] = []
+        if set_cookie:
+            headers.append(("Set-Cookie", set_cookie))
+        return session.user_id, headers
 
     def handle(self, method: str, path: str, handler: BaseHTTPRequestHandler) -> tuple[int, bytes, str, list[tuple[str, str]]]:
         if path == "/api/auth/status" and method == "GET":
-            # resolve updates last_seen; status endpoint should not force auth
-            cookie = handler.headers.get("Cookie")
-            token_ok = self.auth._token_from_cookie(cookie)  # noqa: SLF001
-            authenticated = False
-            user_id = None
-            if token_ok:
-                session = self.auth.resolve(cookie)
-                if session:
-                    authenticated = True
-                    user_id = session.user_id
-            return _json_bytes(
+            session, set_cookie = self.auth.ensure(handler.headers.get("Cookie"))
+            status, body_b, ctype, headers = _json_bytes(
                 {
-                    "configured": self.auth.password_configured,
-                    "authenticated": authenticated,
-                    "user_id": user_id,
+                    "authenticated": True,
+                    "user_id": session.user_id,
                     "online": True,
                 }
             )
+            if set_cookie:
+                headers = list(headers) + [("Set-Cookie", set_cookie)]
+            return status, body_b, ctype, headers
 
         if path == "/api/auth/login" and method == "POST":
-            try:
-                body = _read_json(handler)
-                password = str(body.get("password") or "")
-                workspace = str(body.get("workspace") or "").strip() or None
-                session = self.auth.login(password, workspace)
-                status, body_b, ctype, headers = _json_bytes(
-                    {"ok": True, "user_id": session.user_id, "authenticated": True}
-                )
-                headers = list(headers) + [("Set-Cookie", self.auth.set_cookie_header(session))]
-                return status, body_b, ctype, headers
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.UNAUTHORIZED)
+            # Kept for compatibility: same as ensure (no nickname).
+            session, set_cookie = self.auth.ensure(handler.headers.get("Cookie"))
+            status, body_b, ctype, headers = _json_bytes(
+                {"ok": True, "user_id": session.user_id, "authenticated": True}
+            )
+            if set_cookie:
+                headers = list(headers) + [("Set-Cookie", set_cookie)]
+            return status, body_b, ctype, headers
 
         if path == "/api/auth/logout" and method == "POST":
-            self.auth.logout(handler.headers.get("Cookie"))
+            # Clearing cookie issues a fresh anonymous id next visit; files stay on disk.
             status, body_b, ctype, headers = _json_bytes({"ok": True})
             headers = list(headers) + [("Set-Cookie", self.auth.clear_cookie_header())]
             return status, body_b, ctype, headers
 
-        user = self.require_user(handler)
-        if not isinstance(user, str):
-            return user
+        user, boot_headers = self.require_user(handler)
 
-        if path == "/api/summary" and method == "GET":
-            return _json_bytes(self.store.summary(user))
+        def _with_boot(
+            resp: tuple[int, bytes, str, list[tuple[str, str]]],
+        ) -> tuple[int, bytes, str, list[tuple[str, str]]]:
+            status, body, ctype, headers = resp
+            if boot_headers:
+                headers = list(headers) + list(boot_headers)
+            return status, body, ctype, headers
 
-        if path == "/api/load" and method == "POST":
-            try:
-                # Prefer existing pickle/cache; else kick import if uploads present
-                info = self.store.dir_info(user)
-                if info.get("loaded") and self.store.pickle_path(user).exists():
-                    self.store.ensure_loaded(user)
-                    return _json_bytes(self.store.summary(user))
-                job = self.store.start_import(user)
-                return _json_bytes({"ok": True, "import": job, **self.store.dir_info(user)})
-            except FileNotFoundError as exc:
-                payload = self.store.dir_info(user)
-                payload["error"] = str(exc)
-                return _json_bytes(payload, status=HTTPStatus.BAD_REQUEST)
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
+        def _authed() -> tuple[int, bytes, str, list[tuple[str, str]]]:
+            if path == "/api/summary" and method == "GET":
+                return _json_bytes(self.store.summary(user))
 
-        if path == "/api/reload" and method == "POST":
-            try:
-                job = self.store.start_import(user)
-                return _json_bytes({"ok": True, "import": job})
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+            if path == "/api/load" and method == "POST":
+                try:
+                    # Prefer existing pickle/cache; else kick import if uploads present
+                    info = self.store.dir_info(user)
+                    if info.get("loaded") and self.store.pickle_path(user).exists():
+                        self.store.ensure_loaded(user)
+                        return _json_bytes(self.store.summary(user))
+                    job = self.store.start_import(user)
+                    return _json_bytes({"ok": True, "import": job, **self.store.dir_info(user)})
+                except FileNotFoundError as exc:
+                    payload = self.store.dir_info(user)
+                    payload["error"] = str(exc)
+                    return _json_bytes(payload, status=HTTPStatus.BAD_REQUEST)
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
 
-        if path == "/api/import/status" and method == "GET":
-            return _json_bytes(self.store.import_status(user))
+            if path == "/api/reload" and method == "POST":
+                try:
+                    job = self.store.start_import(user)
+                    return _json_bytes({"ok": True, "import": job})
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
 
-        if path == "/api/upload" and method == "POST":
-            try:
-                files = _parse_multipart(handler)
-                saved_all: list[str] = []
-                for name, data in files:
-                    result = self.store.save_upload(user, name, data)
-                    saved_all.extend(result.get("saved") or [])
-                return _json_bytes(
-                    {
-                        "ok": True,
-                        "saved": saved_all,
-                        "summary": self.store.dir_info(user),
-                    }
-                )
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
+            if path == "/api/import/status" and method == "GET":
+                return _json_bytes(self.store.import_status(user))
 
-        if path == "/api/upload/clear" and method == "POST":
-            self.store.clear_uploads(user)
-            return _json_bytes({"ok": True, "summary": self.store.dir_info(user)})
+            if path == "/api/upload" and method == "POST":
+                try:
+                    files = _parse_multipart(handler)
+                    saved_all: list[str] = []
+                    for name, data in files:
+                        result = self.store.save_upload(user, name, data)
+                        saved_all.extend(result.get("saved") or [])
+                    return _json_bytes(
+                        {
+                            "ok": True,
+                            "saved": saved_all,
+                            "summary": self.store.dir_info(user),
+                        }
+                    )
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
 
-        if path == "/api/unload" and method == "POST":
-            self.store.unload(user)
-            return _json_bytes({"ok": True})
+            if path == "/api/upload/clear" and method == "POST":
+                # Uploads are permanent; never delete hand files. Only drop in-memory cache.
+                self.store.unload(user)
+                return _json_bytes({"ok": True, "summary": self.store.dir_info(user)})
 
-        # Disabled local-only endpoints
-        if path in ("/api/data-dir", "/api/browse-dir", "/api/browse-dir/status"):
-            return _error("在线版不支持本地目录选择", HTTPStatus.BAD_REQUEST)
+            if path == "/api/unload" and method == "POST":
+                self.store.unload(user)
+                return _json_bytes({"ok": True})
 
-        if path == "/api/metrics" and method == "GET":
-            from poker.metrics.base import list_metrics
+            # Disabled local-only endpoints
+            if path in ("/api/data-dir", "/api/browse-dir", "/api/browse-dir/status"):
+                return _error("在线版不支持本地目录选择", HTTPStatus.BAD_REQUEST)
 
-            return _json_bytes({"metrics": list_metrics()})
+            if path == "/api/metrics" and method == "GET":
+                from poker.metrics.base import list_metrics
 
-        metric_match = re.fullmatch(r"/api/metrics/([^/]+)", path)
-        if metric_match:
-            metric_id = unquote(metric_match.group(1))
-            try:
-                if method == "GET":
-                    return _json_bytes(self.store.compute_metric(user, metric_id))
-                if method == "POST":
+                return _json_bytes({"metrics": list_metrics()})
+
+            metric_match = re.fullmatch(r"/api/metrics/([^/]+)", path)
+            if metric_match:
+                metric_id = unquote(metric_match.group(1))
+                try:
+                    if method == "GET":
+                        return _json_bytes(self.store.compute_metric(user, metric_id))
+                    if method == "POST":
+                        body = _read_json(handler)
+                        return _json_bytes(
+                            self.store.compute_metric(
+                                user,
+                                metric_id,
+                                _spec_from_body(body),
+                                options=_options_from_body(body),
+                            )
+                        )
+                except KeyError as exc:
+                    return _error(str(exc), HTTPStatus.NOT_FOUND)
+                except FileNotFoundError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+
+            if path == "/api/replay/hand" and method == "POST":
+                try:
+                    body = _read_json(handler)
+                    source = str(body.get("source") or "").strip()
+                    if not source:
+                        return _error("source is required", HTTPStatus.BAD_REQUEST)
+                    index = body.get("index", 0)
+                    return _json_bytes(
+                        self.store.replay_hand(
+                            user,
+                            source,
+                            index,
+                            _spec_from_body(body),
+                            _options_from_body(body),
+                        )
+                    )
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+                except FileNotFoundError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+
+            if path in ("/api/analyze/profit_curve", "/api/profit/curve"):
+                try:
+                    if method == "GET":
+                        return _json_bytes(self.store.compute_metric(user, "profit_curve"))
+                    if method == "POST":
+                        body = _read_json(handler)
+                        return _json_bytes(
+                            self.store.compute_metric(
+                                user,
+                                "profit_curve",
+                                _spec_from_body(body),
+                                options=_options_from_body(body),
+                            )
+                        )
+                except KeyError as exc:
+                    return _error(str(exc), HTTPStatus.NOT_FOUND)
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+                except FileNotFoundError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+
+            analyze_match = re.fullmatch(r"/api/analyze/([^/]+)", path)
+            if analyze_match and method == "POST":
+                metric_id = unquote(analyze_match.group(1))
+                try:
                     body = _read_json(handler)
                     return _json_bytes(
                         self.store.compute_metric(
@@ -242,101 +303,34 @@ class OnlineApp:
                             options=_options_from_body(body),
                         )
                     )
-            except KeyError as exc:
-                return _error(str(exc), HTTPStatus.NOT_FOUND)
-            except FileNotFoundError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
+                except KeyError as exc:
+                    return _error(str(exc), HTTPStatus.NOT_FOUND)
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
+                except FileNotFoundError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
 
-        if path == "/api/replay/hand" and method == "POST":
-            try:
-                body = _read_json(handler)
-                source = str(body.get("source") or "").strip()
-                if not source:
-                    return _error("source is required", HTTPStatus.BAD_REQUEST)
-                index = body.get("index", 0)
-                return _json_bytes(
-                    self.store.replay_hand(
-                        user,
-                        source,
-                        index,
-                        _spec_from_body(body),
-                        _options_from_body(body),
-                    )
-                )
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
-            except FileNotFoundError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
+            if path == "/api/tools/equity" and method == "POST":
+                try:
+                    from poker.equity import monte_carlo_equity
 
-        if path in ("/api/analyze/profit_curve", "/api/profit/curve"):
-            try:
-                if method == "GET":
-                    return _json_bytes(self.store.compute_metric(user, "profit_curve"))
-                if method == "POST":
                     body = _read_json(handler)
-                    return _json_bytes(
-                        self.store.compute_metric(
-                            user,
-                            "profit_curve",
-                            _spec_from_body(body),
-                            options=_options_from_body(body),
-                        )
-                    )
-            except KeyError as exc:
-                return _error(str(exc), HTTPStatus.NOT_FOUND)
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
-            except FileNotFoundError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
+                    player1 = str(body.get("player1") or "").strip()
+                    player2 = str(body.get("player2") or "").strip()
+                    board = str(body.get("board") or "").strip()
+                    samples = int(body.get("samples") or 20000)
+                    samples = max(1000, min(samples, 50_000))
+                    if not player1 or not player2:
+                        return _error("player1 与 player2 均不能为空", HTTPStatus.BAD_REQUEST)
+                    with self.gate.slot("heavy"):
+                        result = monte_carlo_equity(player1, player2, board or None, samples=samples)
+                    return _json_bytes(result)
+                except BusyError as exc:
+                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
+                except ValueError as exc:
+                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
 
-        analyze_match = re.fullmatch(r"/api/analyze/([^/]+)", path)
-        if analyze_match and method == "POST":
-            metric_id = unquote(analyze_match.group(1))
-            try:
-                body = _read_json(handler)
-                return _json_bytes(
-                    self.store.compute_metric(
-                        user,
-                        metric_id,
-                        _spec_from_body(body),
-                        options=_options_from_body(body),
-                    )
-                )
-            except KeyError as exc:
-                return _error(str(exc), HTTPStatus.NOT_FOUND)
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
-            except FileNotFoundError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
-
-        if path == "/api/tools/equity" and method == "POST":
-            try:
-                from poker.equity import monte_carlo_equity
-
-                body = _read_json(handler)
-                player1 = str(body.get("player1") or "").strip()
-                player2 = str(body.get("player2") or "").strip()
-                board = str(body.get("board") or "").strip()
-                samples = int(body.get("samples") or 20000)
-                samples = max(1000, min(samples, 50_000))
-                if not player1 or not player2:
-                    return _error("player1 与 player2 均不能为空", HTTPStatus.BAD_REQUEST)
-                with self.gate.slot("heavy"):
-                    result = monte_carlo_equity(player1, player2, board or None, samples=samples)
-                return _json_bytes(result)
-            except BusyError as exc:
-                return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-            except ValueError as exc:
-                return _error(str(exc), HTTPStatus.BAD_REQUEST)
-
-        return _error("Not found", HTTPStatus.NOT_FOUND)
+            return _error("Not found", HTTPStatus.NOT_FOUND)
+        return _with_boot(_authed())

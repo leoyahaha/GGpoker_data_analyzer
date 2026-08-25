@@ -1,7 +1,7 @@
 """
 Poker Analyzer — local offline HTTP app (Python stdlib only).
 
-Offline: bind 127.0.0.1. Online: set POKER_MODE=online (+ POKER_ACCESS_PASSWORD).
+Offline: bind 127.0.0.1. Online: set POKER_MODE=online.
 """
 
 from __future__ import annotations
@@ -362,12 +362,6 @@ def main() -> int:
     if online:
         settings = load_settings()
         host, port = settings.host, settings.port
-        if not settings.access_password:
-            print(
-                "[ERROR] Online mode requires POKER_ACCESS_PASSWORD",
-                file=sys.stderr,
-            )
-            return 1
         _get_online_app()  # init early
         LocalHandler.online = True
 

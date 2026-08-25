@@ -9,8 +9,9 @@ venv/
 # Poker Analyzer local prefs
 poker_analyzer/local_settings.json
 
-# Online cloud data (uploads / pickle / sessions)
+# Online cloud data (uploads / pickle / sessions) — never commit user hands
 poker_analyzer/online_data/
+poker_data/
 
 # Extracted portable Python (keep runtime/*.zip in repo)
 runtime/python/

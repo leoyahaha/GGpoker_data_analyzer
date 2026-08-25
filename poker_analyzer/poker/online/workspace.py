@@ -278,19 +278,8 @@ class WorkspaceStore:
         return dict(job)
 
     def clear_uploads(self, user_id: str) -> None:
-        uploads = self.uploads_dir(user_id)
-        for p in uploads.glob("*.txt"):
-            try:
-                p.unlink()
-            except OSError:
-                pass
-        for extra in (self.pickle_path(user_id), self.meta_path(user_id)):
-            try:
-                extra.unlink(missing_ok=True)
-            except OSError:
-                pass
-        with self._lock:
-            self._cache.pop(user_id, None)
+        # Hand files are permanent operator-owned data — never delete from disk.
+        self.unload(user_id)
 
     def unload(self, user_id: str) -> None:
         with self._lock:

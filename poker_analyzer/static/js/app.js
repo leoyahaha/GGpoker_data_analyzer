@@ -187,9 +187,6 @@
       const err = new Error(detail || res.statusText);
       err.status = res.status;
       err.retryAfter = retryAfter;
-      if (res.status === 401 && isOnlineMode()) {
-        showLoginGate(true);
-      }
       throw err;
     }
     return res.json();
@@ -199,56 +196,9 @@
     return document.body?.dataset?.mode === "online";
   }
 
-  function showLoginGate(show) {
-    const gate = $("#loginGate");
-    if (gate) gate.hidden = !show;
-  }
-
   async function ensureOnlineAuth() {
-    const status = await fetchJSON("/api/auth/status");
-    if (!status.configured) {
-      throw new Error("服务器未配置访问密码（POKER_ACCESS_PASSWORD）");
-    }
-    if (status.authenticated) {
-      showLoginGate(false);
-      const logoutBtn = $("#logoutBtn");
-      if (logoutBtn) logoutBtn.hidden = false;
-      return status;
-    }
-    showLoginGate(true);
-    return new Promise((resolve, reject) => {
-      const btn = $("#loginBtn");
-      const pwd = $("#loginPassword");
-      const ws = $("#loginWorkspace");
-      const statusEl = $("#loginStatus");
-      const onLogin = async () => {
-        statusEl.textContent = "登录中…";
-        try {
-          await fetchJSON("/api/auth/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              password: pwd.value || "",
-              workspace: (ws.value || "").trim() || null,
-            }),
-          });
-          showLoginGate(false);
-          const logoutBtn = $("#logoutBtn");
-          if (logoutBtn) logoutBtn.hidden = false;
-          statusEl.textContent = "";
-          resolve(true);
-        } catch (err) {
-          statusEl.textContent = err.message || "登录失败";
-        }
-      };
-      btn.onclick = onLogin;
-      pwd.onkeydown = (ev) => {
-        if (ev.key === "Enter") {
-          ev.preventDefault();
-          onLogin();
-        }
-      };
-    });
+    // Anonymous cookie identity: server mints pa_uid if missing.
+    return fetchJSON("/api/auth/status");
   }
 
   async function pollImportUntilDone() {
@@ -308,36 +258,37 @@
       }
       const data = await res.json();
       const n = (data.saved || []).length;
-      $("#uploadStatus").textContent = `已上传 ${n} 个文件，点击「开始导入」解析。`;
+      btn.textContent = "已上传";
+      btn.dataset.pending = "";
+      $("#uploadStatus").textContent = `已上传 ${n} 个文件，正在解析…`;
       if (data.summary) {
         state.filterDefaults = null;
         applySummary(data.summary, { announce: false });
       }
       showToast("上传成功", `共 ${n} 个牌谱文件`);
+      await startImport();
     } catch (err) {
       $("#uploadStatus").textContent = `上传失败: ${err.message}`;
+      btn.textContent = "点击上传";
       console.error(err);
     } finally {
       btn.disabled = false;
-      btn.textContent = "上传";
     }
   }
 
   async function startImport() {
-    const btn = $("#importBtn");
-    btn.disabled = true;
-    $("#uploadStatus").textContent = "已加入导入队列…";
+    $("#uploadStatus").textContent = "正在解析牌谱…";
     try {
       await fetchJSON("/api/reload", { method: "POST" });
       await pollImportUntilDone();
-      $("#uploadStatus").textContent = "导入完成，可以设置筛选后点击「分析」。";
+      $("#uploadStatus").textContent = "解析完成，可以设置筛选后点击「分析」。";
+      const uploadBtn = $("#uploadBtn");
+      if (uploadBtn) uploadBtn.textContent = "已上传";
       $("#filterStatus").classList.add("is-ready");
       $("#filterStatus").textContent = "数据已就绪，请点击「分析」。";
     } catch (err) {
-      $("#uploadStatus").textContent = `导入失败: ${err.message}`;
-      showToast("导入失败", err.message, { type: "warn" });
-    } finally {
-      btn.disabled = false;
+      $("#uploadStatus").textContent = `解析失败: ${err.message}`;
+      showToast("解析失败", err.message, { type: "warn" });
     }
   }
 
@@ -960,10 +911,19 @@
       if (uploadStatus && data.online) {
         const files = data.file_count || 0;
         const hands = data.hand_count || 0;
+        const uploadBtn = $("#uploadBtn");
+        if (uploadBtn) {
+          uploadBtn.textContent =
+            uploadBtn.dataset.pending === "1"
+              ? "点击上传"
+              : files || hands
+                ? "已上传"
+                : "点击上传";
+        }
         uploadStatus.textContent = data.loaded
-          ? `工作区已就绪：${hands} 手 · ${files} 个文件`
+          ? `已就绪：${hands} 手 · ${files} 个文件`
           : files
-            ? `已有 ${files} 个文件，点击「开始导入」解析`
+            ? `已有 ${files} 个文件，点击「重新导入」可再次解析`
             : "尚未上传文件。";
       }
     }
@@ -1912,19 +1872,11 @@
       if (reloadBtn) reloadBtn.textContent = "重新导入";
       await ensureOnlineAuth();
       $("#uploadBtn")?.addEventListener("click", () => uploadFiles());
-      $("#importBtn")?.addEventListener("click", () => startImport());
-      $("#clearUploadBtn")?.addEventListener("click", async () => {
-        if (!confirm("确定清空已上传牌谱与缓存？")) return;
-        const data = await fetchJSON("/api/upload/clear", { method: "POST" });
-        state.filterDefaults = null;
-        state.analyzed = false;
-        setAnalysisVisible(false);
-        if (data.summary) applySummary(data.summary, { announce: false });
-        $("#uploadStatus").textContent = "已清空。";
-      });
-      $("#logoutBtn")?.addEventListener("click", async () => {
-        await fetchJSON("/api/auth/logout", { method: "POST" });
-        location.reload();
+      $("#uploadInput")?.addEventListener("change", () => {
+        const btn = $("#uploadBtn");
+        if (!btn) return;
+        btn.dataset.pending = "1";
+        btn.textContent = "点击上传";
       });
     }
 
