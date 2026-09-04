@@ -51,8 +51,11 @@ class Hand:
 
     @property
     def fees(self) -> float:
-        """All pot deductions (rake + GG side fees)."""
-        return self.rake + self.jackpot + self.bingo + self.fortune + self.tax
+        """All known pot deductions, including site-specific fees in ``extra``."""
+        additional = self.extra.get("additional_fees", 0.0)
+        if not isinstance(additional, (int, float)):
+            additional = 0.0
+        return self.rake + self.jackpot + self.bingo + self.fortune + self.tax + additional
 
     @property
     def net_invested(self) -> float:
@@ -78,7 +81,7 @@ class Hand:
         Pot fees attributed to Hero for pre-fee profit (rake + jackpot + ...).
 
         Winner-pays: proportional to collected amount; 0 if Hero did not collect.
-        Matches GG-style 'before fees' totals (Rake and Jackpot both added back).
+        Matches site 'before fees' totals by adding back all known deductions.
         """
         return self._collector_share(self.fees)
 

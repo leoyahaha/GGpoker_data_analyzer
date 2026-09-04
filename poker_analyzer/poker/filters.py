@@ -26,12 +26,12 @@ PRESET_TABLE_FORMATS: tuple[tuple[str, str], ...] = (
 _VALID_TABLE_FORMATS = {TABLE_FORMAT_6MAX, TABLE_FORMAT_9MAX}
 
 _STAKES_RE = re.compile(
-    r"\$?(?P<sb>\d+(?:\.\d+)?)\s*/\s*\$?(?P<bb>\d+(?:\.\d+)?)",
+    r"[$₮]?(?P<sb>\d+(?:\.\d+)?)\s*/\s*[$₮]?(?P<bb>\d+(?:\.\d+)?)",
 )
 
 
 def normalize_stakes(raw: str) -> str | None:
-    """Normalize '$0.05/$0.1' or '0.05/0.1' → '0.05/0.1'."""
+    """Normalize supported currency stakes to a plain ``small/big`` key."""
     if not raw:
         return None
     m = _STAKES_RE.search(raw.replace(" ", ""))
@@ -137,6 +137,10 @@ def _parse_date(value: Any) -> date | None:
 
 
 _FILENAME_DATE_RE = re.compile(r"^GG(?P<y>\d{4})(?P<m>\d{2})(?P<d>\d{2})")
+_FILENAME_STAKES_FMT_RE = re.compile(
+    r" -\s*(?P<sb>\d+(?:\.\d+)?)\s*-\s*(?P<bb>\d+(?:\.\d+)?)\s*-\s*(?P<fmt>6max|9max)\.txt$",
+    re.IGNORECASE,
+)
 
 
 def file_date_from_name(name: str) -> date | None:
@@ -148,7 +152,14 @@ def file_date_from_name(name: str) -> date | None:
 
 
 def hand_file_date(hand: Hand) -> date | None:
-    return file_date_from_name(hand.source_file)
+    file_day = file_date_from_name(hand.source_file)
+    if file_day is not None:
+        return file_day
+    # A recognized legacy filename stays filename-driven. Arbitrary CoinPoker
+    # and renamed GG files fall back to their parsed header datetime.
+    if _FILENAME_STAKES_FMT_RE.search(hand.source_file):
+        return None
+    return hand.datetime.date()
 
 
 def hand_stakes_key(hand: Hand) -> str | None:
@@ -229,42 +240,73 @@ def available_stakes_for_format(hands: Iterable[Hand], table_format: str) -> lis
     return available_stakes(subset)
 
 
-_FILENAME_STAKES_FMT_RE = re.compile(
-    r" -\s*(?P<sb>\d+(?:\.\d+)?)\s*-\s*(?P<bb>\d+(?:\.\d+)?)\s*-\s*(?P<fmt>6max|9max)\.txt$",
-    re.IGNORECASE,
-)
-
-
 def directory_filter_hints(directory: Path) -> dict[str, Any]:
-    """Lightweight scan of *.txt filenames before full hand parse."""
+    """Discover filters from known filenames, with per-hand content fallback."""
     formats: set[str] = set()
     stakes_by_format: dict[str, set[str]] = {TABLE_FORMAT_6MAX: set(), TABLE_FORMAT_9MAX: set()}
     if not directory.is_dir():
         return {"table_formats": formats, "stakes_by_format": stakes_by_format}
 
     file_dates: list[date] = []
+    content_game_types: set[str] = set()
+    used_filename_metadata = False
     for path in directory.glob("*.txt"):
         if not path.is_file():
             continue
         name = path.name
-        lower = name.lower()
         day = file_date_from_name(name)
         if day:
             file_dates.append(day)
+
+        # Keep the established GG filename path fast and unchanged.
         m = _FILENAME_STAKES_FMT_RE.search(name)
         if m:
+            used_filename_metadata = True
             fmt = m.group("fmt").lower()
             formats.add(fmt)
             key = normalize_stakes(f"{m.group('sb')}/{m.group('bb')}")
             if key:
                 stakes_by_format[fmt].add(key)
             continue
+
+        from poker.parser import scan_hand_metadata
+
+        try:
+            hand_metadata = scan_hand_metadata(
+                path.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError:
+            hand_metadata = []
+
+        found_content_format = False
+        for metadata in hand_metadata:
+            if day is None:
+                file_dates.append(metadata.datetime.date())
+            haystack = f"{metadata.table_name} {name}".lower()
+            content_game_types.add(
+                GAME_TYPE_RUSH if "rushandcash" in haystack else GAME_TYPE_NLH
+            )
+            if metadata.max_players <= 0:
+                continue
+            fmt = (
+                TABLE_FORMAT_9MAX
+                if metadata.max_players >= 9
+                else TABLE_FORMAT_6MAX
+            )
+            found_content_format = True
+            formats.add(fmt)
+            key = normalize_stakes(metadata.stakes)
+            if key:
+                stakes_by_format[fmt].add(key)
+
+        if found_content_format:
+            continue
+
+        # Retain partial legacy filename hints only when content has no table.
+        lower = name.lower()
         if "9max" in lower:
             formats.add(TABLE_FORMAT_9MAX)
         elif "6max" in lower:
-            formats.add(TABLE_FORMAT_6MAX)
-        else:
-            # Legacy filenames (e.g. all_hand/) without suffix → treat as 6-max cash.
             formats.add(TABLE_FORMAT_6MAX)
 
     file_dates.sort()
@@ -272,6 +314,8 @@ def directory_filter_hints(directory: Path) -> dict[str, Any]:
         "table_formats": formats,
         "stakes_by_format": {k: sort_stakes(v) for k, v in stakes_by_format.items()},
         "file_dates": file_dates,
+        "content_game_types": content_game_types,
+        "used_filename_metadata": used_filename_metadata,
     }
 
 
@@ -285,6 +329,11 @@ def filter_options_from_directory(directory: Path) -> dict[str, Any]:
     for stakes in stakes_by_format.values():
         all_stakes.update(stakes)
     sorted_stakes = sort_stakes(all_stakes)
+    content_game_types = set(hints.get("content_game_types") or [])
+    if hints.get("used_filename_metadata") or not content_game_types:
+        present_game_types = {gid for gid, _ in PRESET_GAME_TYPES}
+    else:
+        present_game_types = content_game_types
 
     return {
         "date_from": file_dates[0].isoformat() if file_dates else None,
@@ -292,10 +341,12 @@ def filter_options_from_directory(directory: Path) -> dict[str, Any]:
         "stakes_presets": _stakes_preset_items(sorted_stakes),
         "stakes_in_data": sorted_stakes,
         "game_types_presets": [
-            {"id": gid, "label": label, "has_data": True}
+            {"id": gid, "label": label, "has_data": gid in present_game_types}
             for gid, label in PRESET_GAME_TYPES
         ],
-        "game_types_in_data": [gid for gid, _ in PRESET_GAME_TYPES],
+        "game_types_in_data": [
+            gid for gid, _ in PRESET_GAME_TYPES if gid in present_game_types
+        ],
         "table_formats_presets": [
             {
                 "id": fid,

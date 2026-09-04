@@ -1,10 +1,36 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from poker.models import Action, Hand
+
+
+@dataclass(frozen=True)
+class HandMetadata:
+    """Header/table fields needed for lightweight filter discovery."""
+
+    hand_id: str
+    site: str
+    game: str
+    datetime: datetime
+    stakes: str
+    table_name: str
+    max_players: int
+
+
+_AMOUNT = r"\d+(?:\.\d+)?"
+_CURRENCY = r"[$₮]"
+_HAND_HEADER_RE = re.compile(
+    r"^(?P<label>CoinPoker Hand|Poker Hand) #(?P<hand_id>[^:\s]+):\s+"
+)
+
+
+def _money_pattern(group: str) -> str:
+    return rf"{_CURRENCY}\s*(?P<{group}>{_AMOUNT})"
+
 
 def _extract_trailing_stakes(text: str) -> tuple[str, str] | None:
     """Split ``game (stakes...)`` where stakes may contain nested ``(...)``."""
@@ -30,12 +56,19 @@ def _extract_trailing_stakes(text: str) -> tuple[str, str] | None:
 
 
 def _parse_hand_header(line: str) -> dict[str, str] | None:
-    """Parse GG hand header; supports nested parentheses in stakes (9-max ante)."""
-    prefix = re.match(r"^Poker Hand #(?P<hand_id>\S+):\s+", line)
+    """Parse a supported site header, including nested GG ante stakes."""
+    prefix = _HAND_HEADER_RE.match(line)
     if not prefix:
         return None
     tail = line[prefix.end() :]
-    dt_m = re.search(r" - (?P<dt>\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})$", tail)
+    site = "coinpoker" if prefix.group("label") == "CoinPoker Hand" else "ggpoker"
+    dt_prefix = r"\s+" if site == "coinpoker" else r"\s+-\s+"
+    dt_m = re.search(
+        dt_prefix
+        + r"(?P<dt>\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})"
+        + r"(?:\s+(?P<timezone>\S+))?\s*$",
+        tail,
+    )
     if not dt_m:
         return None
     parsed = _extract_trailing_stakes(tail[: dt_m.start()].strip())
@@ -47,6 +80,8 @@ def _parse_hand_header(line: str) -> dict[str, str] | None:
         "game": game,
         "stakes": stakes,
         "dt": dt_m.group("dt"),
+        "site": site,
+        "timezone": dt_m.group("timezone") or "",
     }
 
 TABLE_RE = re.compile(
@@ -55,7 +90,8 @@ TABLE_RE = re.compile(
 )
 
 SEAT_RE = re.compile(
-    r"^Seat (?P<seat>\d+):\s+(?P<name>\S+)\s+\(\$(?P<stack>[\d.]+) in chips\)",
+    rf"^Seat (?P<seat>\d+):\s+(?P<name>\S+)\s+"
+    rf"\({_money_pattern('stack')} in chips\)",
 )
 
 DEALT_HERO_RE = re.compile(r"^Dealt to Hero \[(?P<cards>[^\]]+)\]")
@@ -63,27 +99,50 @@ DEALT_HERO_RE = re.compile(r"^Dealt to Hero \[(?P<cards>[^\]]+)\]")
 # Money actions for any player; we filter Hero separately.
 ACTION_RE = re.compile(
     r"^(?P<name>\S+):\s+"
-    r"(?P<action>posts small blind|posts big blind|posts the ante|"
+    r"(?P<action>posts small blind|posts big blind|posts (?:the )?ante|"
     r"posts small & big blinds|posts|"
-    r"bets|calls|raises|checks|folds|shows|mucks)"
+    r"bets|calls|raises|checks|folds|shows|mucks|ALLIN)"
     r"(?P<rest>.*)$"
 )
 
-RAISES_RE = re.compile(r"raises \$(?P<by>[\d.]+) to \$(?P<to>[\d.]+)")
-BETS_CALLS_RE = re.compile(r"(?:bets|calls) \$(?P<amount>[\d.]+)")
-POSTS_RE = re.compile(r"posts(?: small blind| big blind| the ante| small & big blinds)? \$(?P<amount>[\d.]+)")
+RAISES_RE = re.compile(
+    rf"raises\s+{_money_pattern('by')}\s+to\s+{_money_pattern('to')}"
+)
+BETS_CALLS_RE = re.compile(rf"(?:bets|calls)\s+{_money_pattern('amount')}")
+POSTS_RE = re.compile(
+    rf"posts(?: small blind| big blind| (?:the )?ante| small & big blinds)?\s+"
+    rf"{_money_pattern('amount')}"
+)
 # Rare: "Hero: posts $0.05" style dead blinds / extras
-POSTS_GENERIC_RE = re.compile(r"posts \$(?P<amount>[\d.]+)")
+POSTS_GENERIC_RE = re.compile(rf"posts\s+{_money_pattern('amount')}")
+ALLIN_RE = re.compile(rf"ALLIN\s+{_money_pattern('amount')}")
 
-RETURNED_RE = re.compile(r"^Uncalled bet \(\$(?P<amount>[\d.]+)\) returned to (?P<name>\S+)")
-COLLECTED_RE = re.compile(r"^(?P<name>\S+) collected \$(?P<amount>[\d.]+) from (?:pot|main pot|side pot(?:-\d+)?)")
+RETURNED_RE = re.compile(
+    rf"^Uncalled bet \({_money_pattern('amount')}\) returned to (?P<name>\S+)"
+)
+DIRECT_RETURN_RE = re.compile(
+    rf"^(?P<name>\S+):\s+RETURN\s+{_money_pattern('amount')}"
+)
+COLLECTED_RE = re.compile(
+    rf"^(?P<name>\S+) collected {_money_pattern('amount')} from "
+    r"(?:pot|main pot|side pot(?:-\d+)?)"
+)
 
 SUMMARY_POT_RE = re.compile(
-    r"Total pot \$(?P<pot>[\d.]+)\s*\|\s*Rake \$(?P<rake>[\d.]+)"
-    r"(?:\s*\|\s*Jackpot \$(?P<jackpot>[\d.]+))?"
-    r"(?:\s*\|\s*Bingo \$(?P<bingo>[\d.]+))?"
-    r"(?:\s*\|\s*Fortune \$(?P<fortune>[\d.]+))?"
-    r"(?:\s*\|\s*Tax \$(?P<tax>[\d.]+))?"
+    rf"\bTotal pot\s+{_money_pattern('pot')}", re.IGNORECASE
+)
+SUMMARY_FEE_RES = {
+    field: re.compile(rf"\b{label}\s+{_money_pattern(field)}", re.IGNORECASE)
+    for field, label in (
+        ("rake", "Rake"),
+        ("jackpot", "Jackpot"),
+        ("bingo", "Bingo"),
+        ("fortune", "Fortune"),
+        ("tax", "Tax"),
+    )
+}
+SPLASH_FEE_RE = re.compile(
+    rf"\bSplash Fee\s+{_money_pattern('splash_fee')}", re.IGNORECASE
 )
 
 _STREET_MARKERS = {
@@ -119,11 +178,11 @@ def _money(value: str | None) -> float:
 
 
 def _split_hands(text: str) -> list[str]:
-    parts = re.split(r"(?=^Poker Hand #)", text, flags=re.MULTILINE)
+    parts = re.split(r"(?=^(?:CoinPoker Hand|Poker Hand) #)", text, flags=re.MULTILINE)
     blocks: list[str] = []
     for part in parts:
         block = part.strip()
-        if not block.startswith("Poker Hand #"):
+        if not _HAND_HEADER_RE.match(block):
             continue
         header_line = block.split("\n", 1)[0]
         if _parse_hand_header(header_line) is None:
@@ -132,14 +191,45 @@ def _split_hands(text: str) -> list[str]:
     return blocks
 
 
+def scan_hand_metadata(text: str) -> list[HandMetadata]:
+    """Read header/table metadata for every supported hand without parsing actions."""
+    metadata: list[HandMetadata] = []
+    for block in _split_hands(text):
+        lines = block.splitlines()
+        header = _parse_hand_header(lines[0])
+        if header is None:
+            continue
+        table_name = ""
+        max_players = 0
+        for line in lines[1:]:
+            table = TABLE_RE.match(line)
+            if table:
+                table_name = table.group("table")
+                max_players = int(table.group("max"))
+                break
+        metadata.append(
+            HandMetadata(
+                hand_id=header["hand_id"],
+                site=header["site"],
+                game=header["game"],
+                datetime=datetime.strptime(header["dt"], "%Y/%m/%d %H:%M:%S"),
+                stakes=header["stakes"],
+                table_name=table_name,
+                max_players=max_players,
+            )
+        )
+    return metadata
+
+
 def parse_hand(raw: str, source_file: str = "") -> Hand | None:
     """Parse a single hand history block into a Hand model."""
     non_empty = [ln.rstrip() for ln in raw.splitlines()]
 
     header = None
     for ln in non_empty:
-        if ln.startswith("Poker Hand #"):
-            header = _parse_hand_header(ln)
+        parsed_header = _parse_hand_header(ln)
+        if parsed_header:
+            header = parsed_header
             break
     if not header:
         return None
@@ -154,6 +244,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
     hero_seat: int | None = None
     hero_cards: str | None = None
     seat_names: dict[int, str] = {}
+    seat_stacks: dict[int, float] = {}
 
     hero_invested = 0.0
     hero_returned = 0.0
@@ -169,7 +260,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
     actions: list[Action] = []
     shown_cards: dict[str, tuple[str, ...]] = {}
 
-    total_pot = 0.0
+    total_pot = splash_fee = 0.0
     rake = jackpot = bingo = fortune = tax = 0.0
     summary_lines: list[str] = []
 
@@ -194,6 +285,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
             seat_no = int(seat_m.group("seat"))
             name = seat_m.group("name")
             seat_names[seat_no] = name
+            seat_stacks[seat_no] = _money(seat_m.group("stack"))
             if name == "Hero":
                 hero_seat = seat_no
             continue
@@ -263,14 +355,27 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
             pot_m = SUMMARY_POT_RE.search(ln)
             if pot_m:
                 total_pot = _money(pot_m.group("pot"))
-                rake = _money(pot_m.group("rake"))
-                jackpot = _money(pot_m.group("jackpot"))
-                bingo = _money(pot_m.group("bingo"))
-                fortune = _money(pot_m.group("fortune"))
-                tax = _money(pot_m.group("tax"))
+            for field, field_re in SUMMARY_FEE_RES.items():
+                field_m = field_re.search(ln)
+                if not field_m:
+                    continue
+                value = _money(field_m.group(field))
+                if field == "rake":
+                    rake = value
+                elif field == "jackpot":
+                    jackpot = value
+                elif field == "bingo":
+                    bingo = value
+                elif field == "fortune":
+                    fortune = value
+                else:
+                    tax = value
+            splash_m = SPLASH_FEE_RE.search(ln)
+            if splash_m:
+                splash_fee = _money(splash_m.group("splash_fee"))
             continue
 
-        returned = RETURNED_RE.match(ln)
+        returned = RETURNED_RE.match(ln) or DIRECT_RETURN_RE.match(ln)
         if returned:
             name = returned.group("name")
             amt = _money(returned.group("amount"))
@@ -370,6 +475,37 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
                     hero_vpip = True
             continue
 
+        if act == "ALLIN":
+            m = ALLIN_RE.search(act + rest)
+            if m:
+                amt = _money(m.group("amount"))
+                prev = street_contrib.get(name, 0.0)
+                highest = max(street_contrib.values(), default=0.0)
+                to_amt = round(prev + amt, 6)
+                if highest <= 0:
+                    kind = "bet"
+                elif to_amt <= highest:
+                    kind = "call"
+                else:
+                    kind = "raise"
+                pot = round(pot + amt, 6)
+                street_contrib[name] = to_amt
+                actions.append(
+                    Action(
+                        street=street,
+                        player=name,
+                        action=kind,
+                        amount=amt,
+                        to_amount=to_amt if kind == "raise" else 0.0,
+                        pot_before=pot_before,
+                        is_hero=is_hero,
+                    )
+                )
+                if is_hero:
+                    hero_invested += amt
+                    hero_vpip = True
+            continue
+
         if act in ("checks", "folds", "shows", "mucks"):
             kind = {
                 "checks": "check",
@@ -393,6 +529,22 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
                 )
             )
             continue
+
+    extra = {"total_collected": round(total_collected, 6)}
+    if header["site"] == "coinpoker":
+        # Site-only metadata lives in ``extra`` so the normalized public model
+        # and existing GG values stay unchanged.
+        extra.update(
+            {
+                "site": header["site"],
+                "game": header["game"],
+                "currency": "₮",
+                "timezone": header["timezone"],
+                "seat_stacks": seat_stacks,
+                "splash_fee": splash_fee,
+                "additional_fees": splash_fee,
+            }
+        )
 
     return Hand(
         hand_id=hand_id,
@@ -420,7 +572,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
         seat_names=seat_names,
         actions=actions,
         shown_cards=shown_cards,
-        extra={"total_collected": round(total_collected, 6)},
+        extra=extra,
     )
 
 
