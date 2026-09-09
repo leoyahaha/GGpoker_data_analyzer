@@ -6,6 +6,52 @@ from pathlib import Path
 
 from poker.models import Action, Hand
 
+
+def _sanitize_stakes_text(stakes: str) -> str:
+    """Repair NUL corruption in stake digits (e.g. '$0\\x0025' → '$0.25')."""
+    return stakes.replace("\x00", ".")
+
+
+def _format_stakes(key: str, original: str) -> str:
+    """Build '$sb/$bb' (keeping ante suffix from original when present)."""
+    sb_s, bb_s = key.split("/", 1)
+    ante = ""
+    ante_m = re.search(r"(\([^()]*\))\s*$", original)
+    if ante_m:
+        ante = ante_m.group(1)
+    return f"${sb_s}/${bb_s}{ante}"
+
+
+def _repair_stakes(stakes: str, actions: list[Action], source_file: str = "") -> str:
+    """Fix corrupt header stakes using filename, else posted blinds."""
+    from poker.filters import normalize_stakes, stakes_key_from_filename
+
+    stakes = _sanitize_stakes_text(stakes)
+    header_key = normalize_stakes(stakes)
+    file_key = stakes_key_from_filename(source_file) if source_file else None
+    if file_key:
+        if header_key == file_key:
+            return stakes
+        return _format_stakes(file_key, stakes)
+
+    if header_key:
+        return stakes
+
+    posted_sb: float | None = None
+    posted_bb: float | None = None
+    for act in actions:
+        if act.action == "posts small blind" and act.amount > 0:
+            posted_sb = act.amount
+        elif act.action == "posts big blind" and act.amount > 0:
+            posted_bb = act.amount
+    if posted_sb is None or posted_bb is None:
+        return stakes
+    posts_key = normalize_stakes(f"{posted_sb}/{posted_bb}")
+    if not posts_key:
+        return stakes
+    return _format_stakes(posts_key, stakes)
+
+
 def _extract_trailing_stakes(text: str) -> tuple[str, str] | None:
     """Split ``game (stakes...)`` where stakes may contain nested ``(...)``."""
     stripped = text.rstrip()
@@ -145,7 +191,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
         return None
 
     hand_id = header["hand_id"]
-    stakes = header["stakes"]
+    stakes = _sanitize_stakes_text(header["stakes"])
     dt = datetime.strptime(header["dt"], "%Y/%m/%d %H:%M:%S")
 
     table_name = ""
@@ -393,6 +439,8 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
                 )
             )
             continue
+
+    stakes = _repair_stakes(stakes, actions, source_file=source_file)
 
     return Hand(
         hand_id=hand_id,

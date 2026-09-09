@@ -34,12 +34,16 @@ def normalize_stakes(raw: str) -> str | None:
     """Normalize '$0.05/$0.1' or '0.05/0.1' → '0.05/0.1'."""
     if not raw:
         return None
-    m = _STAKES_RE.search(raw.replace(" ", ""))
+    # Some Rush histories insert NUL in stake digits (e.g. '$0\\x0025/$0.5').
+    cleaned = raw.replace("\x00", ".").replace(" ", "")
+    m = _STAKES_RE.search(cleaned)
     if not m:
         return None
-    sb = _fmt_level(float(m.group("sb")))
-    bb = _fmt_level(float(m.group("bb")))
-    return f"{sb}/{bb}"
+    sb = float(m.group("sb"))
+    bb = float(m.group("bb"))
+    if sb <= 0 or bb <= 0 or sb >= bb:
+        return None
+    return f"{_fmt_level(sb)}/{_fmt_level(bb)}"
 
 
 def _fmt_level(value: float) -> str:
@@ -233,6 +237,14 @@ _FILENAME_STAKES_FMT_RE = re.compile(
     r" -\s*(?P<sb>\d+(?:\.\d+)?)\s*-\s*(?P<bb>\d+(?:\.\d+)?)\s*-\s*(?P<fmt>6max|9max)\.txt$",
     re.IGNORECASE,
 )
+
+
+def stakes_key_from_filename(name: str) -> str | None:
+    """Extract normalized 'sb/bb' from GG export filenames when present."""
+    m = _FILENAME_STAKES_FMT_RE.search(Path(name).name)
+    if not m:
+        return None
+    return normalize_stakes(f"{m.group('sb')}/{m.group('bb')}")
 
 
 def directory_filter_hints(directory: Path) -> dict[str, Any]:
