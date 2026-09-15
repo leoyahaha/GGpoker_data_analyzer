@@ -17,6 +17,10 @@ public_cash_hand_zip/*
 !public_cash_hand_zip/unzip_all.bat
 public_cash_hand/
 
+# Local hand / zip dumps (too large for repo)
+all_hand/
+all_zip/
+
 # OS / editor
 .DS_Store
 Thumbs.db
