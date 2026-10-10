@@ -320,25 +320,5 @@ class OnlineApp:
                 except FileNotFoundError as exc:
                     return _error(str(exc), HTTPStatus.BAD_REQUEST)
 
-            if path == "/api/tools/equity" and method == "POST":
-                try:
-                    from poker.equity import monte_carlo_equity
-
-                    body = _read_json(handler)
-                    player1 = str(body.get("player1") or "").strip()
-                    player2 = str(body.get("player2") or "").strip()
-                    board = str(body.get("board") or "").strip()
-                    samples = int(body.get("samples") or 20000)
-                    samples = max(1000, min(samples, 50_000))
-                    if not player1 or not player2:
-                        return _error("player1 与 player2 均不能为空", HTTPStatus.BAD_REQUEST)
-                    with self.gate.slot("heavy"):
-                        result = monte_carlo_equity(player1, player2, board or None, samples=samples)
-                    return _json_bytes(result)
-                except BusyError as exc:
-                    return _error(str(exc), HTTPStatus.SERVICE_UNAVAILABLE, retry_after=exc.retry_after)
-                except ValueError as exc:
-                    return _error(str(exc), HTTPStatus.BAD_REQUEST)
-
             return _error("Not found", HTTPStatus.NOT_FOUND)
         return _with_boot(_authed())

@@ -58,12 +58,13 @@ class WorkspaceStore:
         self._janitor.start()
 
     def user_dir(self, user_id: str) -> Path:
-        path = self.root / "users" / user_id
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return self.root / "users" / user_id
 
     def uploads_dir(self, user_id: str) -> Path:
-        path = self.user_dir(user_id) / "uploads"
+        return self.user_dir(user_id) / "uploads"
+
+    def _ensure_uploads_dir(self, user_id: str) -> Path:
+        path = self.uploads_dir(user_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -195,7 +196,7 @@ class WorkspaceStore:
 
     def save_upload(self, user_id: str, filename: str, data: bytes) -> dict[str, Any]:
         name = self.validate_upload(filename, data)
-        uploads = self.uploads_dir(user_id)
+        uploads = self._ensure_uploads_dir(user_id)
         if name.lower().endswith(".zip"):
             return self._save_zip(user_id, uploads, name, data)
         target = uploads / name
@@ -354,6 +355,7 @@ class WorkspaceStore:
         return ds
 
     def _persist(self, user_id: str, ds: HandDataset) -> None:
+        self.user_dir(user_id).mkdir(parents=True, exist_ok=True)
         pkl = self.pickle_path(user_id)
         tmp = pkl.with_suffix(".tmp")
         with tmp.open("wb") as f:

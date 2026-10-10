@@ -1747,7 +1747,7 @@
       overviewSection("PREFLOP", ["VPIP", "PFR", "ATS", "3BET"], data.preflop),
       overviewSection("FLOP", ["CB", "FCB", "CCB", "RCB"], data.flop),
       overviewSection("TURN", ["CB", "FCB", "CCB", "RCB"], data.turn),
-      overviewSection("RIVER", ["WT", "WSD", "TAF"], data.river, "cols-3"),
+      overviewSection("RIVER", ["WT", "WSD", "WWSF", "TAF"], data.river),
     ].join("");
   }
 
