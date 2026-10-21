@@ -1775,6 +1775,8 @@
     const fees = data.total_rake_paid;
     const rakeOnly = data.total_rake_only;
     const jackpot = data.total_jackpot_share;
+    const sd = data.total_showdown_winnings ?? 0;
+    const nsd = data.total_non_showdown_winnings ?? 0;
     stats.innerHTML = `
       <div class="stat">
         <span class="label">手数</span>
@@ -1787,6 +1789,14 @@
       <div class="stat">
         <span class="label">总计真实盈利（费用后）</span>
         <span class="value ${moneyClass(after)}">${fmtMoney(after)}</span>
+      </div>
+      <div class="stat">
+        <span class="label">摊牌盈利（蓝线）</span>
+        <span class="value ${moneyClass(sd)}">${fmtMoney(sd)}</span>
+      </div>
+      <div class="stat">
+        <span class="label">非摊牌盈利（红线）</span>
+        <span class="value ${moneyClass(nsd)}">${fmtMoney(nsd)}</span>
       </div>
       <div class="stat">
         <span class="label">累计费用（Rake+JP）</span>
@@ -1828,6 +1838,20 @@
             data: data.series.profit_after_rake,
             borderColor: "#3d9b7a",
             backgroundColor: "rgba(61, 155, 122, 0.12)",
+            ...datasetCommon,
+          },
+          {
+            label: "蓝线（摊牌盈利）",
+            data: data.series.showdown_winnings,
+            borderColor: "#3498db",
+            backgroundColor: "rgba(52, 152, 219, 0.08)",
+            ...datasetCommon,
+          },
+          {
+            label: "红线（非摊牌盈利）",
+            data: data.series.non_showdown_winnings,
+            borderColor: "#e74c3c",
+            backgroundColor: "rgba(231, 76, 60, 0.08)",
             ...datasetCommon,
           },
         ],
