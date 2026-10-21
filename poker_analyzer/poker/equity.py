@@ -225,7 +225,7 @@ def _enumerate_equity(a: int, b: int, c: int, d: int) -> float:
 def _sample_equity(a: int, b: int, c: int, d: int, samples: int = 40000) -> float:
     used = {a, b, c, d}
     deck = [i for i in range(52) if i not in used]
-    rng = Random((a, b, c, d, samples))
+    rng = Random(hash((a, b, c, d, samples)) & 0xFFFFFFFFFFFFFFFF)
     wins = ties = 0
     h7 = [a, b, 0, 0, 0, 0, 0]
     v7 = [c, d, 0, 0, 0, 0, 0]

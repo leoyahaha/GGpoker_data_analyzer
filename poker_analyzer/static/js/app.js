@@ -1611,9 +1611,11 @@
 
     const before = data.total_profit_before_rake;
     const after = data.total_profit_after_rake;
+    const allinEv = data.total_profit_allin_ev ?? before;
     const fees = data.total_rake_paid;
     const rakeOnly = data.total_rake_only;
     const jackpot = data.total_jackpot_share;
+    const luck = before - allinEv;
     stats.innerHTML = `
       <div class="stat">
         <span class="label">手数</span>
@@ -1626,6 +1628,14 @@
       <div class="stat">
         <span class="label">总计真实盈利（费用后）</span>
         <span class="value ${moneyClass(after)}">${fmtMoney(after)}</span>
+      </div>
+      <div class="stat">
+        <span class="label">全压EV（理论）</span>
+        <span class="value ${moneyClass(allinEv)}">${fmtMoney(allinEv)}</span>
+      </div>
+      <div class="stat">
+        <span class="label">全压运气（实际−EV）</span>
+        <span class="value ${moneyClass(luck)}">${fmtMoney(luck)}</span>
       </div>
       <div class="stat">
         <span class="label">累计费用（Rake+JP）</span>
@@ -1667,6 +1677,13 @@
             data: data.series.profit_after_rake,
             borderColor: "#3d9b7a",
             backgroundColor: "rgba(61, 155, 122, 0.12)",
+            ...datasetCommon,
+          },
+          {
+            label: "全压EV",
+            data: data.series.profit_allin_ev || data.series.profit_before_rake,
+            borderColor: "#5b8fd9",
+            backgroundColor: "rgba(91, 143, 217, 0.12)",
             ...datasetCommon,
           },
         ],

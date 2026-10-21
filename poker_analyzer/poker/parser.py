@@ -208,6 +208,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
     street_contrib: dict[str, float] = {}
     went_to_flop = False
     flop_cards: tuple[str, ...] = ()
+    board_cards: list[str] = []
     hero_vpip = False
     in_summary = False
     street = "preflop"
@@ -254,6 +255,8 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
             parsed = _parse_card_tokens(flop_line.group("cards"))
             if not flop_cards:
                 flop_cards = parsed
+            if not board_cards and len(parsed) >= 3:
+                board_cards = list(parsed[:3])
             went_to_flop = True
             reset_street_contrib()
             street = "flop"
@@ -261,12 +264,18 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
 
         turn_line = TURN_LINE_RE.match(ln)
         if turn_line:
+            card = _parse_card_tokens(turn_line.group("card"))
+            if len(board_cards) == 3 and card:
+                board_cards.append(card[0])
             reset_street_contrib()
             street = "turn"
             continue
 
         river_line = RIVER_LINE_RE.match(ln)
         if river_line:
+            card = _parse_card_tokens(river_line.group("card"))
+            if len(board_cards) == 4 and card:
+                board_cards.append(card[0])
             reset_street_contrib()
             street = "river"
             continue
@@ -295,11 +304,14 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
         if in_summary:
             summary_lines.append(ln)
             board_m = BOARD_SUMMARY_RE.match(ln)
-            if board_m and not flop_cards:
+            if board_m:
                 parsed = _parse_card_tokens(board_m.group("cards"))
                 if len(parsed) >= 3:
-                    flop_cards = parsed[:3]
-                    went_to_flop = True
+                    if not flop_cards:
+                        flop_cards = parsed[:3]
+                        went_to_flop = True
+                    if len(board_cards) < len(parsed):
+                        board_cards = list(parsed)
             showed = SEAT_SHOWED_RE.match(ln)
             if showed:
                 name = showed.group("name")
@@ -342,6 +354,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
         act = action.group("action")
         rest = action.group("rest") or ""
         is_hero = name == "Hero"
+        is_all_in = "and is all-in" in rest
         pot_before = pot
 
         # Posts (blinds/antes) — not VPIP
@@ -361,6 +374,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
                         amount=amt,
                         pot_before=pot_before,
                         is_hero=is_hero,
+                        is_all_in=is_all_in,
                     )
                 )
                 if is_hero:
@@ -387,6 +401,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
                         to_amount=to_amt,
                         pot_before=pot_before,
                         is_hero=is_hero,
+                        is_all_in=is_all_in,
                     )
                 )
                 if is_hero:
@@ -409,6 +424,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
                         amount=amt,
                         pot_before=pot_before,
                         is_hero=is_hero,
+                        is_all_in=is_all_in,
                     )
                 )
                 if is_hero:
@@ -463,6 +479,7 @@ def parse_hand(raw: str, source_file: str = "") -> Hand | None:
         raw_summary="\n".join(summary_lines),
         went_to_flop=went_to_flop,
         flop_cards=flop_cards,
+        board_cards=tuple(board_cards),
         hero_vpip=hero_vpip,
         button_seat=button_seat,
         seat_names=seat_names,

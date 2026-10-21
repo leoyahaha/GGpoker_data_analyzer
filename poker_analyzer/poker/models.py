@@ -16,6 +16,7 @@ class Action:
     to_amount: float = 0.0  # street total after a raise ("raises to $X")
     pot_before: float = 0.0
     is_hero: bool = False
+    is_all_in: bool = False
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Hand:
     raw_summary: str = ""
     went_to_flop: bool = False
     flop_cards: tuple[str, ...] = ()
+    board_cards: tuple[str, ...] = ()
     hero_vpip: bool = False
     button_seat: int | None = None
     seat_names: dict[int, str] = field(default_factory=dict)
