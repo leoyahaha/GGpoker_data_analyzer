@@ -16,9 +16,11 @@ def _hero_hole(hand: Hand) -> str | None:
     return hand.hero_cards
 
 
-def _equity_known(hero: str, villain: str, board: list[str]) -> float | None:
+def _equity_known(
+    hero: str, villain: str, board: list[str], *, samples: int = 40000
+) -> float | None:
     if not board:
-        return preflop_equity(hero, villain)
+        return preflop_equity(hero, villain, samples=samples)
     h = parse_hole_cards(hero)
     v = parse_hole_cards(villain)
     b = parse_board(board)
@@ -50,7 +52,7 @@ def _equity_known(hero: str, villain: str, board: list[str]) -> float | None:
     return (wins + 0.5 * ties) / total
 
 
-def early_allin_ev_profit(hand: Hand) -> float | None:
+def early_allin_ev_profit(hand: Hand, *, samples: int = 40000) -> float | None:
     """
     Theoretical before-fee profit for HU all-in before river showdown.
 
@@ -88,15 +90,19 @@ def early_allin_ev_profit(hand: Hand) -> float | None:
     if len(board) < board_n:
         return None
 
-    eq = _equity_known(hero, villain, board)
+    eq = _equity_known(hero, villain, board, samples=samples)
     if eq is None:
         return None
     return round(eq * hand.total_pot - hand.net_invested, 6)
 
 
-def profit_allin_ev(hand: Hand) -> float:
+def profit_allin_ev(hand: Hand, *, samples: int = 40000) -> float:
     """Per-hand profit for the all-in EV curve (falls back to actual before-fee)."""
-    ev = early_allin_ev_profit(hand)
-    if ev is None:
-        return hand.profit_before_rake
-    return ev
+    cache = hand.extra.setdefault("_allin_ev_by_samples", {})
+    cached = cache.get(samples)
+    if cached is not None:
+        return cached
+    ev = early_allin_ev_profit(hand, samples=samples)
+    value = hand.profit_before_rake if ev is None else ev
+    cache[samples] = value
+    return value

@@ -98,6 +98,11 @@ class Hand:
         return round(self.profit_after_rake + self.rake_share, 6)
 
     @property
+    def went_to_showdown(self) -> bool:
+        """True if Hero's hand was shown/mucked at showdown (vs. everyone folding)."""
+        return "Hero" in self.shown_cards
+
+    @property
     def stakes_key(self) -> str | None:
         """Normalized blinds key, e.g. '0.05/0.1'."""
         from poker.filters import normalize_stakes

@@ -247,17 +247,22 @@ def _sample_equity(a: int, b: int, c: int, d: int, samples: int = 40000) -> floa
     return (wins + 0.5 * ties) / samples
 
 
-@lru_cache(maxsize=4096)
-def _equity_cached(a: int, b: int, c: int, d: int, swapped: bool) -> float:
+@lru_cache(maxsize=8192)
+def _equity_cached(a: int, b: int, c: int, d: int, swapped: bool, samples: int) -> float:
     hero = (a, b)
     villain = (c, d)
     if _same_category_tie(hero, villain):
         return 0.5
-    equity = _sample_equity(a, b, c, d)
+    equity = _sample_equity(a, b, c, d, samples=samples)
     return 1.0 - equity if swapped else equity
 
 
-def preflop_equity(hero_cards: Iterable[str] | str, villain_cards: Iterable[str] | str) -> float | None:
+def preflop_equity(
+    hero_cards: Iterable[str] | str,
+    villain_cards: Iterable[str] | str,
+    *,
+    samples: int = 40000,
+) -> float | None:
     """Hero equity vs villain on a random full runout (ties count as half)."""
     hero = parse_hole_cards(hero_cards if isinstance(hero_cards, str) else tuple(hero_cards))
     villain = parse_hole_cards(villain_cards if isinstance(villain_cards, str) else tuple(villain_cards))
@@ -267,7 +272,7 @@ def preflop_equity(hero_cards: Iterable[str] | str, villain_cards: Iterable[str]
         return None
     key = _matchup_key(hero, villain)
     swapped = tuple(sorted(hero)) != key[:2]
-    return _equity_cached(key[0], key[1], key[2], key[3], swapped)
+    return _equity_cached(key[0], key[1], key[2], key[3], swapped, int(samples))
 
 
 # --- Range parsing & Monte Carlo equity ---

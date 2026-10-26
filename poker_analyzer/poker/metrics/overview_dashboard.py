@@ -201,7 +201,7 @@ def compute_overview(hands: list[Hand]) -> dict[str, Any]:
     turn_cb_n = turn_cb_opp = 0
     turn_fcb = turn_ccb = turn_rcb = turn_face = 0
 
-    saw_flop_n = wtsd_n = wsd_n = 0
+    saw_flop_n = wwsf_n = wtsd_n = wsd_n = 0
     agg_bet_raise = agg_call = agg_fold = 0
 
     total = len(hands)
@@ -229,6 +229,8 @@ def compute_overview(hands: list[Hand]) -> dict[str, Any]:
 
         if _hero_saw_flop(hand):
             saw_flop_n += 1
+            if hand.hero_collected > 0:
+                wwsf_n += 1
             if _hero_went_to_showdown(hand):
                 wtsd_n += 1
                 if hand.hero_collected > 0:
@@ -308,6 +310,7 @@ def compute_overview(hands: list[Hand]) -> dict[str, Any]:
         "river": {
             "WT": _stat(wtsd_n, saw_flop_n),
             "WSD": _stat(wsd_n, wtsd_n),
+            "WWSF": _stat(wwsf_n, saw_flop_n),
             "TAF": _stat(agg_bet_raise, taf_den),
         },
     }
@@ -324,8 +327,8 @@ class OverviewDashboardMetric(Metric):
 
     def compute(self, dataset: HandDataset, options: dict[str, Any] | None = None) -> dict[str, Any]:
         _ = options
-        hands = dataset.sorted_hands()
-        payload = compute_overview(hands)
+        # Load/filter already keep chronological order.
+        payload = compute_overview(dataset.hands)
         payload["metric_id"] = self.id
         payload["name"] = self.name
         return payload

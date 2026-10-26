@@ -17,6 +17,12 @@ class AnalysisService:
         load_builtin_metrics()
         self.data_dir = resolve_data_dir(data_dir) if data_dir else load_data_dir()
         self._dataset: HandDataset | None = None
+        self._filter_cache_key: tuple[Any, ...] | None = None
+        self._filter_cache: HandDataset | None = None
+
+    def _clear_filter_cache(self) -> None:
+        self._filter_cache_key = None
+        self._filter_cache = None
 
     def set_data_dir(self, data_dir: Path | str, *, persist: bool = True) -> Path:
         path = resolve_data_dir(data_dir)
@@ -24,11 +30,13 @@ class AnalysisService:
             save_data_dir(path)
         self.data_dir = path
         self._dataset = None
+        self._clear_filter_cache()
         return path
 
     def reload(self) -> HandDataset:
         source = LocalDirectorySource(self.data_dir)
         self._dataset = source.load()
+        self._clear_filter_cache()
         return self._dataset
 
     @property
@@ -100,7 +108,25 @@ class AnalysisService:
         }
 
     def filtered_dataset(self, spec: FilterSpec | None = None) -> HandDataset:
-        return apply_filter(self.dataset, spec)
+        # Reuse last filter result across sequential metric requests (same analyze click).
+        key: tuple[Any, ...]
+        if spec is None:
+            key = ()
+        else:
+            d = spec.to_dict()
+            key = (
+                d.get("date_from"),
+                d.get("date_to"),
+                tuple(d.get("stakes") or ()),
+                tuple(d.get("game_types") or ()),
+                d.get("table_format"),
+            )
+        if key == self._filter_cache_key and self._filter_cache is not None:
+            return self._filter_cache
+        filtered = apply_filter(self.dataset, spec)
+        self._filter_cache_key = key
+        self._filter_cache = filtered
+        return filtered
 
     def compute_metric(
         self,
