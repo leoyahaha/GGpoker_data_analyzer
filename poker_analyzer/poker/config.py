@@ -82,6 +82,63 @@ def _resolve_start(initial: Path | str | None) -> Path:
     return Path.home()
 
 
+UPLOAD_DIR = PROJECT_ROOT / "uploads"
+
+
+def gui_browse_available() -> bool:
+    """Native folder dialog needs a display (except Windows)."""
+    if sys.platform == "win32":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def ingest_client_uploads(files: list[tuple[str, bytes]]) -> dict:
+    """Save browser-uploaded .txt/.zip into uploads/ and return saved names + path."""
+    import io
+    import zipfile
+
+    from poker.online.workspace import WorkspaceStore
+
+    if not files:
+        raise ValueError("未找到上传文件")
+
+    upload_dir = UPLOAD_DIR
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    for old in upload_dir.iterdir():
+        if old.is_file():
+            old.unlink()
+
+    saved: list[str] = []
+    for name, data in files:
+        base = Path(name).name
+        WorkspaceStore.validate_upload(base, data)
+        if base.lower().endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    member = Path(info.filename).name
+                    if not member.lower().endswith(".txt"):
+                        continue
+                    raw = zf.read(info)
+                    try:
+                        WorkspaceStore.validate_upload(member, raw)
+                    except ValueError:
+                        continue
+                    out = (upload_dir / member).resolve()
+                    if not str(out).startswith(str(upload_dir.resolve())):
+                        continue
+                    out.write_bytes(raw)
+                    saved.append(member)
+        else:
+            (upload_dir / base).write_bytes(data)
+            saved.append(base)
+
+    if not saved:
+        raise ValueError("没有可用的 .txt 牌谱")
+    return {"saved": saved, "path": str(upload_dir.resolve())}
+
+
 def _python_for_gui() -> str:
     """Prefer pythonw.exe on Windows so only the folder dialog appears."""
     exe = Path(sys.executable)
@@ -135,6 +192,12 @@ def start_browse_job(initial: Path | str | None = None) -> dict:
     """Start folder dialog in a background thread; returns immediately."""
     global _browse_job
     start = _resolve_start(initial)
+
+    if not gui_browse_available():
+        return {
+            "status": "client_upload",
+            "message": "请从你的电脑选择牌谱文件夹（文件会上传到分析服务）。",
+        }
 
     with _browse_lock:
         if _browse_job and _browse_job.get("status") == "pending":

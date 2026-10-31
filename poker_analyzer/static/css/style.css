@@ -1580,3 +1580,43 @@ h1 {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+.dir-picker-modal {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 560px);
+}
+
+.dir-picker-list {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 180px;
+  max-height: 360px;
+  margin-bottom: 12px;
+}
+
+.dir-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.dir-picker-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dir-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

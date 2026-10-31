@@ -6,8 +6,9 @@ __pycache__/
 venv/
 .env
 
-# Poker Analyzer local prefs
+# Poker Analyzer local prefs / browser uploads
 poker_analyzer/local_settings.json
+poker_analyzer/uploads/
 
 # Online cloud data (uploads / pickle / sessions) — never commit user hands
 poker_analyzer/online_data/

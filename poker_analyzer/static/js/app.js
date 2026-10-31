@@ -227,6 +227,28 @@
     return loadSummary({ announce: true });
   }
 
+  function pickUploadFiles() {
+    return new Promise((resolve) => {
+      const input = $("#uploadInput");
+      if (!input) {
+        resolve(null);
+        return;
+      }
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("focus", onFocus);
+        resolve(input.files && input.files.length ? input.files : null);
+      };
+      const onFocus = () => setTimeout(finish, 400);
+      input.value = "";
+      input.onchange = finish;
+      window.addEventListener("focus", onFocus);
+      input.click();
+    });
+  }
+
   async function uploadFiles() {
     const input = $("#uploadInput");
     const files = input?.files;
@@ -277,7 +299,7 @@
       }
       const data = await res.json();
       const n = (data.saved || []).length;
-      btn.textContent = "已上传";
+      btn.textContent = "继续上传";
       btn.dataset.pending = "";
       $("#uploadStatus").textContent = `已上传 ${n} 个文件，正在解析…`;
       if (data.summary) {
@@ -288,12 +310,22 @@
       await startImport();
     } catch (err) {
       $("#uploadStatus").textContent = `上传失败: ${err.message}`;
-      btn.textContent = "点击上传";
+      btn.textContent = "上传数据";
       showToast("上传已禁止", err.message, { type: "warn" });
       console.error(err);
     } finally {
       btn.disabled = false;
     }
+  }
+
+  async function pickAndUpload() {
+    $("#uploadStatus").textContent = "请选择你电脑上的 .txt / .zip…";
+    const files = await pickUploadFiles();
+    if (!files) {
+      $("#uploadStatus").textContent = "已取消选择。";
+      return;
+    }
+    await uploadFiles();
   }
 
   async function startImport() {
@@ -303,7 +335,7 @@
       await pollImportUntilDone();
       $("#uploadStatus").textContent = "解析完成，可以设置筛选后点击「分析」。";
       const uploadBtn = $("#uploadBtn");
-      if (uploadBtn) uploadBtn.textContent = "已上传";
+      if (uploadBtn) uploadBtn.textContent = "继续上传";
       $("#filterStatus").classList.add("is-ready");
       $("#filterStatus").textContent = "数据已就绪，请点击「分析」。";
     } catch (err) {
@@ -919,32 +951,24 @@
     if (data.data_dir) {
       const dirInput = $("#dataDirInput");
       const dirStatus = $("#dataDirStatus");
-      if (dirInput) dirInput.value = data.data_dir;
-      const resolved = data.data_dir_resolved || data.data_dir;
-      if (dirStatus) {
-        dirStatus.textContent =
-          resolved && resolved !== data.data_dir
-            ? `当前: ${data.data_dir} (${resolved})`
-            : `当前: ${data.data_dir}`;
+      // 公网/默认不预填目录，必须由用户主动选择或上传
+      if (dirStatus && !isOnlineMode()) {
+        const typed = dirInput?.value.trim() || "";
+        dirStatus.textContent = typed ? `当前输入: ${typed}` : "请填写目录后点「加载」。";
       }
       const uploadStatus = $("#uploadStatus");
       if (uploadStatus && data.online) {
         const files = data.file_count || 0;
         const hands = data.hand_count || 0;
         const uploadBtn = $("#uploadBtn");
-        if (uploadBtn) {
-          uploadBtn.textContent =
-            uploadBtn.dataset.pending === "1"
-              ? "点击上传"
-              : files || hands
-                ? "已上传"
-                : "点击上传";
+        if (uploadBtn && uploadBtn.dataset.pending !== "1") {
+          uploadBtn.textContent = files || hands ? "继续上传" : "上传数据";
         }
         uploadStatus.textContent = data.loaded
           ? `已就绪：${hands} 手 · ${files} 个文件`
           : files
-            ? `已有 ${files} 个文件，点击「重新导入」可再次解析`
-            : "尚未上传文件。";
+            ? `已有 ${files} 个文件，可继续上传或点「重新导入」`
+            : "请先上传牌谱文件。";
       }
     }
     if (data.error) {
@@ -1097,16 +1121,104 @@
     }
   }
 
+  function pickClientHandFiles() {
+    return new Promise((resolve) => {
+      const preferDir = $("#localUploadDirInput");
+      const preferFiles = $("#localUploadInput");
+      const input = preferDir || preferFiles;
+      if (!input) {
+        resolve(null);
+        return;
+      }
+      let settled = false;
+      const finish = (files) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("focus", onFocus);
+        resolve(files && files.length ? files : null);
+      };
+      const onFocus = () => {
+        setTimeout(() => {
+          if (!settled) finish(input.files);
+        }, 400);
+      };
+      input.value = "";
+      input.onchange = () => finish(input.files);
+      window.addEventListener("focus", onFocus);
+      input.click();
+    });
+  }
+
+  async function uploadClientHandFiles(fileList) {
+    const allowed = [];
+    for (const f of fileList) {
+      if (/\.(txt|zip)$/i.test(f.name)) allowed.push(f);
+    }
+    if (!allowed.length) {
+      throw new Error("所选内容里没有 .txt / .zip 牌谱");
+    }
+    const tooBig = allowed.filter((f) => f.size > 50 * 1024 * 1024);
+    if (tooBig.length) {
+      throw new Error(`文件过大（单文件不超过 50MB）: ${tooBig[0].name}`);
+    }
+    const form = new FormData();
+    for (const f of allowed) form.append("files", f, f.name);
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: form,
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const payload = await res.json();
+        detail = payload.detail || detail;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
   async function browseDataDir() {
     const btn = $("#browseDirBtn");
     btn.disabled = true;
-    $("#dataDirStatus").textContent = "正在打开文件夹窗口，请看任务栏或桌面弹窗…";
+    $("#dataDirStatus").textContent = "正在打开文件夹窗口…";
     try {
       const started = await fetchJSON("/api/browse-dir", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ initial: $("#dataDirInput").value.trim() || null }),
       });
+
+      const useClientUpload = async (hint) => {
+        $("#dataDirStatus").textContent = hint || "请在弹窗中选择你电脑上的牌谱文件夹…";
+        const files = await pickClientHandFiles();
+        if (!files) {
+          $("#dataDirStatus").textContent = "已取消选择。";
+          return;
+        }
+        $("#dataDirStatus").textContent = `正在上传 ${files.length} 个文件…`;
+        const data = await uploadClientHandFiles(files);
+        const path = data.data_dir || data.data_dir_resolved || "";
+        if (path) $("#dataDirInput").value = path;
+        const n = (data.saved || []).length;
+        $("#dataDirStatus").textContent = `已从本机上传 ${n} 个牌谱文件，正在加载…`;
+        if (data.summary) {
+          state.filterDefaults = null;
+          applySummary(data.summary, { announce: true });
+        } else {
+          await loadSummary({ announce: true });
+        }
+        $("#dataDirStatus").textContent = `已上传并加载 ${n} 个文件。可设置筛选后点「分析」。`;
+      };
+
+      if (started.status === "client_upload") {
+        await useClientUpload(started.message);
+        return;
+      }
+
       if (started.message) {
         $("#dataDirStatus").textContent = started.message;
       }
@@ -1121,7 +1233,12 @@
           return;
         }
         if (status.status === "error") {
-          throw new Error(status.error || "未知错误");
+          const errMsg = status.error || "未知错误";
+          if (/DISPLAY|display name|tkinter|TclError/i.test(errMsg)) {
+            await useClientUpload("系统弹窗不可用，改为从你的电脑选择文件…");
+            return;
+          }
+          throw new Error(errMsg);
         }
         if (status.status === "done" && status.path) {
           $("#dataDirInput").value = status.path;
@@ -1915,13 +2032,12 @@
       const reloadBtn = $("#reloadBtn");
       if (reloadBtn) reloadBtn.textContent = "重新导入";
       await ensureOnlineAuth();
-      $("#uploadBtn")?.addEventListener("click", () => uploadFiles());
-      $("#uploadInput")?.addEventListener("change", () => {
-        const btn = $("#uploadBtn");
-        if (!btn) return;
-        btn.dataset.pending = "1";
-        btn.textContent = "点击上传";
-      });
+      $("#uploadBtn")?.addEventListener("click", () => pickAndUpload());
+    } else {
+      const localBar = $("#localDataBar");
+      const onlineBar = $("#onlineDataBar");
+      if (localBar) localBar.hidden = false;
+      if (onlineBar) onlineBar.hidden = true;
     }
 
     await loadSummary({ announce: true });
@@ -1936,15 +2052,14 @@
       $("#filterStatus").textContent = "已重置为全部数据，点击「分析」生效。";
     });
     if (!isOnlineMode()) {
-      $("#browseDirBtn").addEventListener("click", () => browseDataDir());
-      $("#applyDirBtn").addEventListener("click", () => applyDataDir());
-      $("#dataDirInput").addEventListener("keydown", (ev) => {
+      $("#applyDirBtn")?.addEventListener("click", () => applyDataDir());
+      $("#dataDirInput")?.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter") {
           ev.preventDefault();
           applyDataDir();
         }
       });
-      $("#dataDirInput").addEventListener("input", () => {
+      $("#dataDirInput")?.addEventListener("input", () => {
         if (state.summary?.loaded) state.summary.loaded = false;
       });
     }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=online-4" />
+  <link rel="stylesheet" href="/static/css/style.css?v=online-8" />
   <link rel="stylesheet" href="/static/css/replay.css" />
   <script src="/static/js/chart.umd.min.js"></script>
 </head>
@@ -21,33 +21,32 @@
       </div>
     </header>
 
-    <section class="data-bar" aria-label="数据目录" id="localDataBar">
+    <section class="data-bar" aria-label="数据目录" id="localDataBar" hidden>
       <div class="data-bar-head">
         <div>
           <h2 class="filter-title">数据目录</h2>
-          <p class="filter-hint">选择存放 GG Poker 文本牌谱（.txt）的本地文件夹；路径会记住，下次启动自动使用。</p>
+          <p class="filter-hint">离线本机模式：粘贴牌谱目录路径后加载（公网请用上传）。</p>
         </div>
       </div>
       <div class="data-path-row">
         <input type="text" id="dataDirInput" class="path-input" spellcheck="false" placeholder="例如 ../all_hand" />
-        <button type="button" class="btn ghost" id="browseDirBtn">浏览…</button>
         <button type="button" class="btn" id="applyDirBtn">加载</button>
       </div>
-      <p class="filter-status" id="dataDirStatus">当前路径将显示在这里。</p>
+      <p class="filter-status" id="dataDirStatus">请填写目录后点「加载」。</p>
     </section>
 
-    <section class="data-bar" aria-label="上传牌谱" id="onlineDataBar" hidden>
+    <section class="data-bar" aria-label="上传数据" id="onlineDataBar" hidden>
       <div class="data-bar-head">
         <div>
-          <h2 class="filter-title">上传牌谱</h2>
-          <p class="filter-hint">上传 GG Poker 导出的 .txt 或包含 .txt 的 .zip。解析结果会缓存在服务器，空闲一段时间后释放内存。</p>
+          <h2 class="filter-title">上传数据</h2>
+          <p class="filter-hint">从你的电脑选择 GG Poker 导出的 .txt 或包含 .txt 的 .zip（可多选），上传后即可分析。</p>
         </div>
       </div>
       <div class="data-path-row">
-        <input type="file" id="uploadInput" accept=".txt,.zip,text/plain,application/zip" multiple />
-        <button type="button" class="btn" id="uploadBtn">点击上传</button>
+        <input type="file" id="uploadInput" accept=".txt,.zip,text/plain,application/zip" multiple hidden />
+        <button type="button" class="btn" id="uploadBtn">上传数据</button>
       </div>
-      <p class="filter-status" id="uploadStatus">尚未上传文件。</p>
+      <p class="filter-status" id="uploadStatus">请先上传牌谱文件。</p>
     </section>
 
     <section class="filter-bar" aria-label="数据筛选器">
@@ -426,6 +425,6 @@
 
   <script src="/static/js/replay.js"></script>
   <script src="/static/js/tools.js"></script>
-  <script src="/static/js/app.js?v=online-5"></script>
+  <script src="/static/js/app.js?v=online-8"></script>
 </body>
 </html>

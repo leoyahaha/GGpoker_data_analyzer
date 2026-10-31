@@ -19,7 +19,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from poker.config import browse_job_status, format_data_dir, load_data_dir, resolve_data_dir, start_browse_job
+from poker.config import (
+    browse_job_status,
+    format_data_dir,
+    ingest_client_uploads,
+    load_data_dir,
+    resolve_data_dir,
+    start_browse_job,
+)
 from poker.filters import FilterSpec
 from poker.online.settings import is_online_mode, load_settings
 from poker.service import get_service
@@ -154,6 +161,39 @@ def _handle_api(method: str, path: str, handler: BaseHTTPRequestHandler) -> tupl
     if path == "/api/browse-dir/status" and method == "GET":
         return _json_bytes(browse_job_status())
 
+    if path == "/api/upload" and method == "POST":
+        try:
+            from poker.online.http_api import _parse_multipart
+
+            files = _parse_multipart(handler)
+            result = ingest_client_uploads(files)
+            svc.set_data_dir(result["path"])
+            try:
+                svc.reload()
+                summary = svc.summary()
+            except Exception as exc:  # noqa: BLE001
+                return _json_bytes(
+                    {
+                        "ok": True,
+                        "saved": result["saved"],
+                        "data_dir": format_data_dir(svc.data_dir),
+                        "data_dir_resolved": str(svc.data_dir),
+                        "warning": str(exc),
+                        "summary": svc.dir_info(),
+                    }
+                )
+            return _json_bytes(
+                {
+                    "ok": True,
+                    "saved": result["saved"],
+                    "data_dir": format_data_dir(svc.data_dir),
+                    "data_dir_resolved": str(svc.data_dir),
+                    "summary": summary,
+                }
+            )
+        except ValueError as exc:
+            return _error(str(exc), HTTPStatus.BAD_REQUEST)
+
     if path == "/api/metrics" and method == "GET":
         from poker.metrics.base import list_metrics
 
@@ -256,9 +296,11 @@ def _serve_index(*, online: bool = False) -> tuple[int, bytes, str]:
     if online:
         html = html.replace("Local Offline", "Online Cloud")
         html = html.replace('data-mode="local"', 'data-mode="online"')
+        html = html.replace('id="onlineDataBar" hidden', 'id="onlineDataBar"')
         if 'data-mode="' not in html:
             html = html.replace("<body>", '<body data-mode="online">', 1)
     else:
+        html = html.replace('id="localDataBar" hidden', 'id="localDataBar"')
         if 'data-mode="' not in html:
             html = html.replace("<body>", '<body data-mode="local">', 1)
     return HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8"
